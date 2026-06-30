@@ -1,0 +1,21 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /$
+Allow: /#landing
+Allow: /#pricing
+Allow: /#about
+Allow: /#contact
+Allow: /#help
+Allow: /favicon.svg
+Allow: /icons.svg
+
+# Disallow indexing of private dashboards & settings
+Disallow: /#dashboard
+Disallow: /#admin-dashboard
+Disallow: /#profile
+Disallow: /#admin
+Disallow: /#login
+Disallow: /#register
+
+# Sitemap location
+Sitemap: https://astra-ai-platform.netlify.app/sitemap.xml

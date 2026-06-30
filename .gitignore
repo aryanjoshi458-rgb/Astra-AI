@@ -1,0 +1,48 @@
+# Node
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+
+# Python Virtual Environments
+.venv/
+backend/venv/
+venv/
+ENV/
+env/
+
+# Python Cache
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Databases
+backend/astra_ai_local.db
+*.db
+*.sqlite3
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+frontend/.env
+backend/.env
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE Files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
