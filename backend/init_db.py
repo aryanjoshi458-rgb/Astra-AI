@@ -4,10 +4,10 @@ from app import models, auth
 
 def init_database():
     print("Initialising database tables...")
-    Base.metadata.create_all(bind=engine)
     
     db = SessionLocal()
     try:
+        Base.metadata.create_all(bind=engine)
         # Check if an admin user already exists
         admin_email = "admin@astra.ai"
         admin_user = db.query(models.User).filter(models.User.email == admin_email).first()

@@ -8,6 +8,9 @@ logger = logging.getLogger("astra_ai.database")
 
 database_url = settings.DATABASE_URL
 
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
 # Fallback to SQLite if PostgreSQL fails to connect, to ensure smooth local testing.
 if not database_url.startswith("postgresql://") and not database_url.startswith("sqlite://"):
     # If the user didn't change it or specified a wrong format, default to SQLite local file
