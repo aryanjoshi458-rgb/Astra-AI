@@ -5,6 +5,13 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+# Monkeypatch bcrypt to fix passlib compatibility issue with newer bcrypt versions
+import bcrypt
+if not hasattr(bcrypt, "__about__"):
+    class MockAbout:
+        __version__ = getattr(bcrypt, "__version__", "4.0.0")
+    bcrypt.__about__ = MockAbout
+
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from app.config import settings
