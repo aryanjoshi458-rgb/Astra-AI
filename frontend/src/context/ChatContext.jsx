@@ -296,7 +296,8 @@ export const ChatProvider = ({ children }) => {
   const exportChatPDF = async (sessionId) => {
     try {
       const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
-      const url = `${baseUrl}/api/chat/sessions/${sessionId}/export`;
+      const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+      const url = `${cleanBaseUrl}/api/chat/sessions/${sessionId}/export`;
       const response = await fetch(url, {
         method: "GET",
         headers: {
