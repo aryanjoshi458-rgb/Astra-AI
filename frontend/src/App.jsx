@@ -6,7 +6,6 @@ import { GoogleOAuthProvider } from "@react-oauth/google";
 import LandingPage from "./pages/LandingPage";
 import AuthPages from "./pages/AuthPages";
 import DashboardPage from "./pages/DashboardPage";
-import AdminDashboardPage from "./pages/AdminDashboardPage";
 import ProfileSettingsPages from "./pages/ProfileSettingsPages";
 import AdminPanelPage from "./pages/AdminPanelPage";
 import StaticPages from "./pages/StaticPages";
@@ -56,6 +55,14 @@ const AppContent = () => {
   }, [currentPage]);
 
   React.useEffect(() => {
+    // Increment page visitor count on server
+    fetch("http://127.0.0.1:8000/api/analytics/visit", { method: "POST" })
+      .then(res => res.json())
+      .then(data => console.log("Visitor analytics registered:", data))
+      .catch(err => console.error("Failed to register visitor analytics:", err));
+  }, []);
+
+  React.useEffect(() => {
     let title = "Astra AI | Think Beyond Limits - Premium AI Assistant Platform";
     let description = "Astra AI is the ultimate next-generation premium AI assistant platform. Engage in real-time advanced conversations, analyze documents/PDFs, write and debug code, search the web with live sources.";
 
@@ -74,9 +81,6 @@ const AppContent = () => {
       case "dashboard":
         title = "Dashboard | Astra AI - Premium AI Assistant Platform";
         description = "Access your personal workspace, chat with AI, upload and search documents, and access settings.";
-        break;
-      case "admin-dashboard":
-        title = "Admin Dashboard | Astra AI - Management";
         break;
       case "profile":
         title = "Profile & Settings | Astra AI";
@@ -127,11 +131,11 @@ const AppContent = () => {
       if (isAuthenticated) {
         // If logged in and on landing/login/register, auto-redirect to correct dashboard
         if (currentPage === "landing" || currentPage === "login" || currentPage === "register") {
-          navigateTo(!!user?.is_admin ? "admin-dashboard" : "dashboard");
-        } else if (!!user?.is_admin && currentPage === "dashboard") {
-          // Redirect admin to admin-dashboard hash
-          navigateTo("admin-dashboard");
-        } else if (!user?.is_admin && currentPage === "admin-dashboard") {
+          navigateTo(!!user?.is_admin ? "admin" : "dashboard");
+        } else if (!!user?.is_admin && (currentPage === "dashboard" || currentPage === "admin-dashboard")) {
+          // Redirect admin to admin panel hash
+          navigateTo("admin");
+        } else if (!user?.is_admin && (currentPage === "admin" || currentPage === "admin-dashboard")) {
           // Redirect normal user to standard dashboard hash
           navigateTo("dashboard");
         }
@@ -168,7 +172,7 @@ const AppContent = () => {
     case "login":
       return isAuthenticated ? (
         !!user?.is_admin ? (
-          <AdminDashboardPage onNavigate={navigateTo} />
+          <AdminPanelPage onNavigate={navigateTo} />
         ) : (
           <DashboardPage onNavigate={navigateTo} />
         )
@@ -179,7 +183,7 @@ const AppContent = () => {
     case "register":
       return isAuthenticated ? (
         !!user?.is_admin ? (
-          <AdminDashboardPage onNavigate={navigateTo} />
+          <AdminPanelPage onNavigate={navigateTo} />
         ) : (
           <DashboardPage onNavigate={navigateTo} />
         )
@@ -190,11 +194,8 @@ const AppContent = () => {
     case "dashboard":
       return renderProtectedRoute(DashboardPage);
 
-    case "admin-dashboard":
-      return renderProtectedRoute(AdminDashboardPage);
-
     case "profile":
-      return renderProtectedRoute(!!user?.is_admin ? AdminDashboardPage : DashboardPage, { initialOpenSettings: true });
+      return renderProtectedRoute(DashboardPage, { initialOpenSettings: true });
 
     case "admin":
       return renderProtectedRoute(AdminPanelPage);

@@ -23,7 +23,7 @@ const AppleIcon = () => (
 );
 
 export const AuthPages = ({ onNavigate, initialMode = "login" }) => {
-  const { requestOTP, verifyOTP, googleLogin, authError, isLoading } = useAuth();
+  const { register, requestOTP, verifyOTP, googleLogin, authError, isLoading } = useAuth();
   
   const [mode, setMode] = useState(initialMode); // login, register, otp_verify
   const [authAction, setAuthAction] = useState(initialMode === "register" ? "register" : "login");
@@ -130,7 +130,12 @@ export const AuthPages = ({ onNavigate, initialMode = "login" }) => {
     
     try {
       if (mode === "login" || mode === "register") {
-        await requestOTP(email, authAction);
+        if (mode === "register") {
+          await register(email, firstName + " " + lastName);
+          await requestOTP(email, "login");
+        } else {
+          await requestOTP(email, authAction);
+        }
         setMode("otp_verify");
         setOtpArray(["", "", "", "", "", ""]);
         setOtpCode("");

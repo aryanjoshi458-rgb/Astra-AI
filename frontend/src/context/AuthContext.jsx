@@ -33,29 +33,13 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password) => {
+  const register = async (email, fullName) => {
     try {
       setAuthError(null);
       setIsLoading(true);
-      const data = await ApiClient.post("/api/auth/login/classic", { email, password });
-      localStorage.setItem("astra_token", data.access_token);
-      setToken(data.access_token);
-      await fetchUserProfile(data.access_token);
-      return true;
-    } catch (err) {
-      setAuthError(err.message || "Login failed");
+      await ApiClient.post("/api/auth/register", { email, full_name: fullName });
       setIsLoading(false);
-      throw err;
-    }
-  };
-
-  const register = async (email, password, fullName) => {
-    try {
-      setAuthError(null);
-      setIsLoading(true);
-      await ApiClient.post("/api/auth/register", { email, password, full_name: fullName });
-      // Automate login
-      return await login(email, password);
+      return true;
     } catch (err) {
       setAuthError(err.message || "Registration failed");
       setIsLoading(false);
@@ -137,7 +121,6 @@ export const AuthProvider = ({ children }) => {
         isAuthenticated,
         isLoading,
         authError,
-        login,
         register,
         requestOTP,
         verifyOTP,

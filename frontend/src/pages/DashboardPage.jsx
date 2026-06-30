@@ -9,7 +9,7 @@ import {
   MessageSquare, Plus, Trash2, Pin, Download, Send, ArrowUp, SendHorizontal, Navigation, AudioLines, Paperclip, Mic, MicOff,
   Volume2, VolumeX, LogOut, Settings, Shield, User, FileText, Camera, Check, Palette,
   Search, Edit3, X, HelpCircle, Terminal, RefreshCw, Sparkles, BookOpen, PanelLeft, PanelLeftClose, ChevronDown, Zap,
-  Folder, FolderPlus, MoreHorizontal, ChevronRight, Copy, ThumbsUp, ThumbsDown, Key, AlertTriangle, MessageSquareDashed, Image, Globe
+  Folder, FolderPlus, MoreHorizontal, ChevronRight, Copy, ThumbsUp, ThumbsDown, Key, AlertTriangle, MessageSquareDashed, Image, Globe, Upload, Code
 } from "lucide-react";
 import ApiClient from "../services/api";
 
@@ -119,7 +119,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
   // Settings Modal States
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [settingsActiveTab, setSettingsActiveTab] = useState("account");
+  const [settingsActiveTab, setSettingsActiveTab] = useState("general");
   const [settingsApiKeys, setSettingsApiKeys] = useState([]);
   const [settingsNewKeyName, setSettingsNewKeyName] = useState("");
   const [settingsCustomKeyValue, setSettingsCustomKeyValue] = useState("");
@@ -138,6 +138,8 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isAppearanceModalOpen, setIsAppearanceModalOpen] = useState(false);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
+  const [isHelpSubmenuOpen, setIsHelpSubmenuOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileAvatar, setProfileAvatar] = useState("");
   const [profileUsername, setProfileUsername] = useState("");
@@ -357,13 +359,72 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
   const handleExecuteUpgrade = async (tier) => {
     try {
       setIsUpgrading(true);
-      await ApiClient.put(`/api/admin/users/${user?.id}/subscription`, { tier });
-      await refreshProfile();
-      setPaymentConfirmPlan(null);
-      setIsPlanModalOpen(false);
-      showDialog({ type: "alert", title: "Success", message: `Successfully updated subscription to ${tier.toUpperCase()}!`, onConfirm: closeDialog });
+
+      const plan = paymentConfirmPlan;
+
+      // Step 1: Get public Razorpay Key ID from backend
+      const payConfig = await ApiClient.get("/api/payment/config");
+      if (!payConfig.configured || !payConfig.key_id) {
+        showDialog({ type: "alert", title: "Payment Not Configured", danger: true, message: "Payment gateway is not set up yet. Please contact admin.", onConfirm: closeDialog });
+        return;
+      }
+
+      // Step 2: Load Razorpay SDK if not loaded
+      if (!window.Razorpay) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://checkout.razorpay.com/v1/checkout.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      // Amount calculation (INR, in paise for Razorpay)
+      const amountINR = Math.round(plan.base_price_usd * (1 + plan.gst_rate / 100) * 83.5);
+      const amountPaise = amountINR * 100;
+
+      // Step 3: Open Razorpay checkout (client-side only, no server order needed)
+      await new Promise((resolve, reject) => {
+        const options = {
+          key: payConfig.key_id,
+          amount: amountPaise,
+          currency: "INR",
+          name: "Astra AI",
+          description: `${plan.display_name || tier} Plan Subscription`,
+          handler: async (response) => {
+            try {
+              // Step 4: Tell backend to upgrade subscription
+              await ApiClient.post("/api/payment/upgrade", {
+                tier,
+                payment_id: response.razorpay_payment_id,
+              });
+              await refreshProfile();
+              setPaymentConfirmPlan(null);
+              setIsPlanModalOpen(false);
+              showDialog({ type: "alert", title: "Payment Successful! 🎉", message: `Your subscription has been upgraded to ${tier.toUpperCase()}!`, onConfirm: closeDialog });
+              resolve();
+            } catch (upgradeErr) {
+              showDialog({ type: "alert", title: "Upgrade Failed", danger: true, message: "Payment received but upgrade failed. Please contact support.", onConfirm: closeDialog });
+              reject(upgradeErr);
+            }
+          },
+          prefill: {
+            email: user?.email || "",
+            name: user?.full_name || "",
+          },
+          theme: { color: "#6366f1" },
+          modal: {
+            ondismiss: () => reject(new Error("Payment cancelled")),
+          },
+        };
+        const rzp = new window.Razorpay(options);
+        rzp.open();
+      });
     } catch (err) {
-      showDialog({ type: "alert", title: "Error", danger: true, message: "Failed to update subscription. Admins can update this dynamically.", onConfirm: closeDialog });
+      if (err?.message !== "Payment cancelled") {
+        showDialog({ type: "alert", title: "Error", danger: true, message: err?.message || "Payment failed. Please try again.", onConfirm: closeDialog });
+      }
     } finally {
       setIsUpgrading(false);
     }
@@ -435,6 +496,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
   const [isLibraryModalOpen, setIsLibraryModalOpen] = useState(false);
   const [libraryActiveTab, setLibraryActiveTab] = useState("images");
   const [isPinnedHoverOpen, setIsPinnedHoverOpen] = useState(false);
+  const [isProjectsHoverOpen, setIsProjectsHoverOpen] = useState(false);
 
   // Add Account / Submenu States
   const [isAccountsSubmenuOpen, setIsAccountsSubmenuOpen] = useState(false);
@@ -664,6 +726,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
   // Projects / Folders states
   const [expandedProjects, setExpandedProjects] = useState([]);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
   const [isAttachmentDropdownOpen, setIsAttachmentDropdownOpen] = useState(false);
   const attachmentDropdownRef = useRef(null);
   const [activeSessionContextMenu, setActiveSessionContextMenu] = useState(null);
@@ -871,7 +934,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
     let fileType = null;
     if (uploadedFiles.length > 0) {
       contextPayload = uploadedFiles.map(f => `--- File Context: ${f.name} ---\n${f.text}`).join("\n\n");
-      
+
       if (uploadedFiles.length === 1) {
         fileUrl = uploadedFiles[0].url;
         fileType = uploadedFiles[0].type;
@@ -930,12 +993,12 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
         key={session.id}
         onClick={() => !isEditing && loadSessionDetail(session.id)}
         className={`group flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-all ${isActive
-          ? "bg-accentBlue/10 border border-accentBlue/20 text-slate-900 dark:text-white"
+          ? "bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-900 dark:text-white"
           : "hover:bg-slate-100 dark:hover:bg-white/5 text-slate-700 dark:text-white border border-transparent"
           }`}
       >
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <MessageSquare size={16} className={isActive ? "text-sky-400" : "text-slate-500 dark:text-white"} />
+          <MessageSquare size={16} className={isActive ? "text-slate-900 dark:text-white" : "text-slate-500 dark:text-white/40"} />
           {isEditing ? (
             <input
               type="text"
@@ -992,7 +1055,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
       {/* 1. Left Sidebar Navigation */}
       <aside className={`shrink-0 border-r border-slate-200 dark:border-white/5 bg-white dark:bg-[#000000] flex flex-col justify-between h-full z-20 transition-all duration-300 ease-in-out ${isSidebarOpen ? "w-[260px]" : "w-[60px]"}`}>
-        <div className="flex flex-col flex-1 overflow-hidden w-full">
+        <div className={`flex flex-col flex-1 w-full ${isSidebarOpen ? "overflow-hidden" : "overflow-visible"}`}>
 
           {/* Sidebar Brand Header */}
           <div className={`pt-3 pb-1 flex items-center ${isSidebarOpen ? "justify-between px-4" : "justify-center px-0 w-full"}`}>
@@ -1062,6 +1125,65 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
               {isSidebarOpen && <span className="truncate">Library</span>}
             </button>
 
+            {/* Folders (Projects) Hover Trigger - Closed Sidebar Only */}
+            {!isSidebarOpen && projects && projects.length > 0 && (
+              <div
+                className="relative"
+                onMouseEnter={() => setIsProjectsHoverOpen(true)}
+                onMouseLeave={() => setIsProjectsHoverOpen(false)}
+              >
+                <button
+                  type="button"
+                  className="w-9 h-9 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-slate-900 dark:text-white transition-all flex items-center justify-center p-0"
+                  title="Folders"
+                >
+                  <Folder size={18} className="shrink-0 text-slate-900 dark:text-white" />
+                </button>
+
+                {isProjectsHoverOpen && (
+                  <div className="absolute left-full top-0 pl-2 z-50">
+                    <div className="w-64 bg-white dark:bg-[#1e1e1e] border border-slate-200 dark:border-white/10 rounded-xl shadow-2xl py-2 animate-fade-in text-slate-800 dark:text-white text-left">
+                      <div className="px-4 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-white/5 mb-1.5 flex items-center gap-2">
+                        <Folder size={12} className="text-slate-500 dark:text-white/60" />
+                        <span>Folders</span>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto scrollbar px-1 space-y-1">
+                        {projects.map(project => {
+                          const projectSessions = sessions.filter(s => s.project_id === project.id);
+                          return (
+                            <div key={project.id} className="p-1">
+                              <div className="px-2 py-1.5 rounded-lg text-sm font-semibold text-slate-800 dark:text-white flex items-center gap-2">
+                                <Folder size={14} className="text-slate-500 dark:text-white/65 shrink-0" />
+                                <span className="truncate">{project.name}</span>
+                              </div>
+                              {projectSessions.length > 0 ? (
+                                <div className="pl-4 pr-1 mt-0.5 space-y-0.5 border-l border-slate-200 dark:border-white/10 ml-3.5">
+                                  {projectSessions.map(session => (
+                                    <div
+                                      key={session.id}
+                                      onClick={() => {
+                                        setActiveSessionId(session.id);
+                                        setIsProjectsHoverOpen(false);
+                                      }}
+                                      className="px-2 py-1 rounded text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer truncate transition-colors"
+                                    >
+                                      {session.title || "Untitled Session"}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-[10px] text-slate-400 dark:text-white/30 pl-8 py-0.5">Empty</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Pinned Hover Trigger - Closed Sidebar Only */}
             {!isSidebarOpen && sessions.some(s => s.is_pinned) && (
               <div
@@ -1074,28 +1196,30 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                   className="w-9 h-9 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-slate-900 dark:text-white transition-all flex items-center justify-center p-0"
                   title="Pinned chats"
                 >
-                  <Pin size={18} className="shrink-0 text-sky-400 rotate-45" />
+                  <Pin size={18} className="shrink-0 text-slate-900 dark:text-white rotate-45" />
                 </button>
 
                 {isPinnedHoverOpen && (
-                  <div className="absolute left-full top-0 ml-2 w-64 bg-[#1e1e1e] border border-white/10 rounded-xl shadow-2xl py-2 z-50 animate-fade-in text-white text-left">
-                    <div className="px-4 py-2 text-xs font-semibold text-slate-400 border-b border-white/5 mb-1.5 flex items-center gap-2">
-                      <Pin size={12} className="text-sky-400 rotate-45" />
-                      <span>Pinned Chats</span>
-                    </div>
-                    <div className="max-h-60 overflow-y-auto scrollbar px-1 space-y-0.5">
-                      {sessions.filter(s => s.is_pinned).map(session => (
-                        <div
-                          key={session.id}
-                          onClick={() => {
-                            setActiveSessionId(session.id);
-                            setIsPinnedHoverOpen(false);
-                          }}
-                          className="px-3 py-2 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-white/5 cursor-pointer truncate transition-colors flex items-center justify-between"
-                        >
-                          <span className="truncate">{session.title || "Untitled Session"}</span>
-                        </div>
-                      ))}
+                  <div className="absolute left-full top-0 pl-2 z-50">
+                    <div className="w-64 bg-white dark:bg-[#1e1e1e] border border-slate-200 dark:border-white/10 rounded-xl shadow-2xl py-2 z-50 animate-fade-in text-slate-800 dark:text-white text-left">
+                      <div className="px-4 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-white/5 mb-1.5 flex items-center gap-2">
+                        <Pin size={12} className="text-slate-500 dark:text-white/60 rotate-45" />
+                        <span>Pinned Chats</span>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto scrollbar px-1 space-y-0.5">
+                        {sessions.filter(s => s.is_pinned).map(session => (
+                          <div
+                            key={session.id}
+                            onClick={() => {
+                              setActiveSessionId(session.id);
+                              setIsPinnedHoverOpen(false);
+                            }}
+                            className="px-3 py-2 rounded-lg text-sm text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer truncate transition-colors flex items-center justify-between"
+                          >
+                            <span className="truncate">{session.title || "Untitled Session"}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1218,7 +1342,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
             {/* Dropdown Menu */}
             {isProfileDropdownOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-60 bg-[#1e1e1e] border border-white/10 rounded-xl shadow-2xl py-1 z-50 animate-fade-in text-white">
+              <div className="absolute bottom-full left-0 mb-2 w-60 bg-white dark:bg-[#1e1e1e] border border-slate-200 dark:border-white/10 rounded-xl shadow-2xl py-1 z-50 animate-fade-in text-slate-800 dark:text-white">
                 {/* User Info Header Item Wrapper with hover detection */}
                 <div
                   className="relative"
@@ -1227,12 +1351,12 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                   <button
                     onClick={() => setIsAccountsSubmenuOpen(!isAccountsSubmenuOpen)}
                     onMouseEnter={() => setIsAccountsSubmenuOpen(true)}
-                    className="w-full text-left px-4 py-3 text-white hover:bg-white/5 flex items-center justify-between border-b border-white/5"
+                    className="w-full text-left px-4 py-3 text-slate-800 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center justify-between border-b border-slate-100 dark:border-white/5"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-white/10 flex items-center justify-center shrink-0 overflow-hidden text-slate-500 dark:text-white/80">
                         {(!user?.avatar_url || avatarError) ? (
-                          <span className="text-slate-500 dark:text-white/80 text-xs font-bold font-sans uppercase">
+                          <span className="text-slate-550 dark:text-white/80 text-xs font-bold font-sans uppercase">
                             {user?.full_name ? user.full_name.substring(0, 2) : "US"}
                           </span>
                         ) : (
@@ -1240,8 +1364,8 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                         )}
                       </div>
                       <div className="flex flex-col min-w-0">
-                        <span className="text-sm font-medium leading-tight truncate text-white">{user?.full_name || "User"}</span>
-                        <span className="text-[11px] text-slate-400 leading-tight">Go</span>
+                        <span className="text-sm font-medium leading-tight truncate text-slate-800 dark:text-white">{user?.full_name || "User"}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight font-medium">Go</span>
                       </div>
                     </div>
                     <ChevronRight size={16} className="text-slate-400" />
@@ -1249,12 +1373,12 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
                   {/* Submenu for Account Switching / Adding */}
                   {isAccountsSubmenuOpen && (
-                    <div className="absolute bottom-full sm:bottom-auto sm:top-0 left-0 sm:left-full sm:ml-2 mb-2 sm:mb-0 w-64 bg-[#1e1e1e] border border-white/10 rounded-xl shadow-2xl py-2 z-[60] animate-fade-in">
-                      <div className="px-4 py-2 text-xs text-slate-400 flex items-center gap-2 border-b border-white/5 truncate">
+                    <div className="absolute bottom-full sm:bottom-auto sm:top-0 left-0 sm:left-full sm:ml-2 mb-2 sm:mb-0 w-64 bg-white dark:bg-[#1e1e1e] border border-slate-200 dark:border-white/10 rounded-xl shadow-2xl py-2 z-[60] animate-fade-in text-slate-800 dark:text-white">
+                      <div className="px-4 py-2 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 border-b border-slate-100 dark:border-white/5 truncate">
                         <User size={14} className="shrink-0" />
                         <span className="truncate">{user?.email || "user@astra.ai"}</span>
                       </div>
-                      <div className="px-4 py-2.5 flex items-center justify-between text-white hover:bg-white/5 cursor-pointer">
+                      <div className="px-4 py-2.5 flex items-center justify-between text-slate-800 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer">
                         <div className="flex items-center gap-3">
                           <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-white/10 flex items-center justify-center shrink-0 overflow-hidden text-slate-500 dark:text-white/80">
                             {(!user?.avatar_url || avatarError) ? (
@@ -1265,11 +1389,11 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                               <img src={user.avatar_url} alt="Profile" className="w-full h-full object-cover" onError={() => setAvatarError(true)} />
                             )}
                           </div>
-                          <span className="text-sm font-normal text-white">{user?.full_name || "User"}</span>
+                          <span className="text-sm font-normal text-slate-800 dark:text-white">{user?.full_name || "User"}</span>
                         </div>
-                        <Check size={16} className="text-emerald-500" />
+                        <Check size={16} className="text-slate-800 dark:text-white" />
                       </div>
-                      <div className="my-1.5 border-t border-white/5"></div>
+                      <div className="my-1.5 border-t border-slate-100 dark:border-white/5"></div>
                       <button
                         onClick={() => {
                           setIsProfileDropdownOpen(false);
@@ -1280,7 +1404,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                           setAddAccountError("");
                           setIsAddAccountModalOpen(true);
                         }}
-                        className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-white/5 flex items-center gap-3"
+                        className="w-full text-left px-4 py-2.5 text-sm text-slate-800 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
                       >
                         <Plus size={16} className="text-slate-400" />
                         <span>Add account</span>
@@ -1294,37 +1418,37 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                     setIsProfileDropdownOpen(false);
                     setIsPlanModalOpen(true);
                   }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-white/5 flex items-center gap-3 mt-1"
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-750 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3 mt-1"
                 >
-                  <Sparkles size={16} className="text-white/70" /> Upgrade plan
+                  <Sparkles size={16} className="text-slate-500 dark:text-white/70" /> Upgrade plan
                 </button>
                 <button
                   onClick={() => {
                     setIsProfileDropdownOpen(false);
                     setIsAppearanceModalOpen(true);
                   }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-white/5 flex items-center gap-3"
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-750 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
                 >
-                  <Palette size={16} className="text-white/70" /> Appearance
+                  <Palette size={16} className="text-slate-500 dark:text-white/70" /> Appearance
                 </button>
                 <button
                   onClick={() => {
                     setIsProfileDropdownOpen(false);
                     setIsProfileModalOpen(true);
                   }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-white/5 flex items-center gap-3"
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-750 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
                 >
-                  <User size={16} className="text-white/70" /> Profile
+                  <User size={16} className="text-slate-500 dark:text-white/70" /> Profile
                 </button>
                 <button
                   onClick={() => {
                     setIsProfileDropdownOpen(false);
-                    setSettingsActiveTab("account");
+                    setSettingsActiveTab("general");
                     setIsSettingsModalOpen(true);
                   }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-white/5 flex items-center gap-3"
+                  className="w-full text-left px-4 py-2.5 text-sm text-slate-750 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
                 >
-                  <Settings size={16} className="text-white/70" /> Settings
+                  <Settings size={16} className="text-slate-500 dark:text-white/70" /> Settings
                 </button>
                 {!!user?.is_admin && (
                   <button
@@ -1332,26 +1456,101 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                       setIsProfileDropdownOpen(false);
                       onNavigate("admin");
                     }}
-                    className="w-full text-left px-4 py-2.5 text-sm text-indigo-400 hover:bg-white/5 flex items-center gap-3 font-medium"
+                    className="w-full text-left px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3 font-medium"
                   >
-                    <Shield size={16} className="text-indigo-400 shrink-0" /> Admin Panel
+                    <Shield size={16} className="text-slate-500 dark:text-slate-400 shrink-0" /> Admin Panel
                   </button>
                 )}
-                <div className="my-1 border-t border-white/5"></div>
-                <button
-                  onClick={() => {
-                    setIsProfileDropdownOpen(false);
-                    alert("Help & Documentation center loading...");
-                  }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-white/5 flex items-center justify-between"
+                <div className="my-1 border-t border-slate-100 dark:border-white/5"></div>
+                <div
+                  className="relative"
+                  onMouseLeave={() => setIsHelpSubmenuOpen(false)}
                 >
-                  <div className="flex items-center gap-3">
-                    <HelpCircle size={16} className="text-white/70" /> Help
-                  </div>
-                  <ChevronRight size={14} className="text-slate-400" />
-                </button>
-                <button onClick={() => logout()} className="w-full text-left px-4 py-2.5 text-sm text-white hover:bg-rose-500/10 flex items-center gap-3">
-                  <LogOut size={16} className="text-white/70" /> Log out
+                  <button
+                    onClick={() => {
+                      setIsProfileDropdownOpen(false);
+                      setIsHelpModalOpen(true);
+                    }}
+                    onMouseEnter={() => setIsHelpSubmenuOpen(true)}
+                    className="w-full text-left px-4 py-2.5 text-sm text-slate-755 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-3">
+                      <HelpCircle size={16} className="text-slate-500 dark:text-white/70" /> Help
+                    </div>
+                    <ChevronRight size={14} className="text-slate-400" />
+                  </button>
+
+                  {/* Help Submenu */}
+                  {isHelpSubmenuOpen && (
+                    <div className="absolute bottom-full sm:bottom-0 left-0 sm:left-full sm:pl-2 mb-2 sm:mb-0 z-[60]">
+                      <div className="w-60 bg-white dark:bg-[#1e1e1e] border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl py-2 animate-fade-in text-slate-800 dark:text-white">
+                        <button
+                          onClick={() => {
+                            setIsProfileDropdownOpen(false);
+                            setIsHelpSubmenuOpen(false);
+                            showDialog({
+                              type: "info",
+                              title: "Coming Soon",
+                              message: "Terms of Service are coming soon to Astra AI!",
+                              confirmText: "Okay",
+                              onConfirm: () => closeDialog()
+                            });
+                          }}
+                          className="w-full text-left px-4 py-2.5 text-xs text-slate-700 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
+                        >
+                          <BookOpen size={15} className="text-slate-500 dark:text-white/70" />
+                          <span>Terms of Service</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setIsProfileDropdownOpen(false);
+                            setIsHelpSubmenuOpen(false);
+                            showDialog({
+                              type: "info",
+                              title: "Coming Soon",
+                              message: "Privacy Policy is coming soon to Astra AI!",
+                              confirmText: "Okay",
+                              onConfirm: () => closeDialog()
+                            });
+                          }}
+                          className="w-full text-left px-4 py-2.5 text-xs text-slate-700 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
+                        >
+                          <Shield size={15} className="text-slate-500 dark:text-white/70" />
+                          <span>Privacy Policy</span>
+                        </button>
+                        <a
+                          href="mailto:support@astra.ai?subject=Bug Report - Astra AI"
+                          className="w-full text-left px-4 py-2.5 text-xs text-slate-700 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
+                        >
+                          <AlertTriangle size={15} className="text-slate-500 dark:text-white/70" />
+                          <span>Report a bug</span>
+                        </a>
+
+                        <div className="my-1.5 border-t border-slate-100 dark:border-white/5"></div>
+
+                        <button
+                          onClick={() => {
+                            setIsProfileDropdownOpen(false);
+                            setIsHelpSubmenuOpen(false);
+                            showDialog({
+                              type: "info",
+                              title: "Coming Soon",
+                              message: "Help center is coming soon to Astra AI!",
+                              confirmText: "Okay",
+                              onConfirm: () => closeDialog()
+                            });
+                          }}
+                          className="w-full text-left px-4 py-2.5 text-xs text-slate-700 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-3"
+                        >
+                          <HelpCircle size={15} className="text-slate-500 dark:text-white/70" />
+                          <span>Help center</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <button onClick={() => logout()} className="w-full text-left px-4 py-2.5 text-sm text-slate-750 dark:text-white hover:bg-rose-500/10 hover:text-rose-600 flex items-center gap-3">
+                  <LogOut size={16} className="text-slate-500 dark:text-white/70" /> Log out
                 </button>
               </div>
             )}
@@ -1601,7 +1800,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                       key={msg.id || index}
                       className={`flex flex-col w-full animate-fade-in ${isUser ? "items-end" : "items-start"}`}
                     >
-                      <div className={`group relative max-w-[85%] md:max-w-[75%] ${isUser ? "bg-indigo-600 text-white dark:bg-[#2f2f2f] dark:text-white rounded-[24px] px-5 py-3 shadow-sm" : "text-slate-800 dark:text-white py-2 w-full"}`}>
+                      <div className={`group relative max-w-[85%] md:max-w-[75%] ${isUser ? "bg-slate-100 text-slate-800 dark:bg-[#2f2f2f] dark:text-white rounded-[24px] px-5 py-3 shadow-sm border border-slate-200/60 dark:border-transparent" : "text-slate-800 dark:text-white py-2 w-full"}`}>
                         {/* If user uploaded a document, display a file tag */}
                         {msg.file_url && (() => {
                           let urls = [];
@@ -1695,11 +1894,16 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
             )}
 
             {/* Border Snake Animation Wrapper */}
-            <div className="relative p-[1.5px] rounded-[24px] overflow-hidden bg-slate-200 dark:bg-zinc-800 transition-colors focus-within:bg-transparent">
+            <div className={`relative p-[1.5px] rounded-[24px] overflow-hidden transition-all duration-300 ${(isInputFocused || chatInput.trim().length > 0)
+              ? "bg-slate-300 dark:bg-[#404040]"
+              : "bg-slate-200 dark:bg-zinc-800 focus-within:bg-transparent"
+              }`}>
               {/* Animated Snake Light */}
-              <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-[24px]">
-                <div className="absolute inset-[-300%] bg-[conic-gradient(from_0deg,transparent_60%,#38bdf8_80%,#3b82f6_90%,#818cf8_95%,transparent_100%)] animate-border-snake origin-center"></div>
-              </div>
+              {!(isInputFocused || chatInput.trim().length > 0) && (
+                <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none rounded-[24px]">
+                  <div className="absolute inset-[-300%] bg-[conic-gradient(from_0deg,transparent_60%,#38bdf8_80%,#3b82f6_90%,#818cf8_95%,transparent_100%)] animate-border-snake origin-center"></div>
+                </div>
+              )}
 
               {/* Form */}
               <form onSubmit={handleSendPrompt} className="relative z-10 bg-white dark:bg-[#2f2f2f] rounded-[23px] p-3 shadow-sm flex flex-col gap-2 w-full h-full border-none outline-none">
@@ -1716,8 +1920,8 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                           key={cmd.command}
                           onClick={() => handleSelectSlashCommand(cmd)}
                           className={`flex items-center justify-between px-4 py-2.5 cursor-pointer select-none transition-colors ${isSelected
-                              ? "bg-slate-100 dark:bg-white/5 text-slate-900 dark:text-white font-medium"
-                              : "text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5"
+                            ? "bg-slate-100 dark:bg-white/5 text-slate-900 dark:text-white font-medium"
+                            : "text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5"
                             }`}
                         >
                           <div className="flex items-center gap-3 min-w-0">
@@ -1845,9 +2049,9 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                     {activePromptMode && (
                       <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-[#1a1a1a] border border-slate-300 dark:border-[#2d2d2d] text-slate-700 dark:text-[#e0e0e0] rounded-full px-2.5 py-1 text-xs select-none animate-fade-in shadow-inner">
                         <div className="w-4 h-4 rounded-full bg-slate-200 dark:bg-white/5 flex items-center justify-center">
-                          {activePromptMode === 'image' && <Camera size={11} className="text-pink-500" />}
-                          {activePromptMode === 'code' && <Edit3 size={11} className="text-emerald-500" />}
-                          {activePromptMode === 'search' && <Globe size={11} className="text-sky-500" />}
+                          {activePromptMode === 'image' && <Sparkles size={11} className="text-pink-500" />}
+                          {activePromptMode === 'code' && <Code size={11} className="text-emerald-500" />}
+                          {activePromptMode === 'search' && <Search size={11} className="text-sky-500" />}
                         </div>
                         <span className="text-[11.5px] font-normal leading-none">
                           {activePromptMode === 'image' && "Create an image"}
@@ -1865,16 +2069,16 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                     )}
 
                     {isAttachmentDropdownOpen && (
-                      <div className="absolute bottom-full left-0 mb-2 w-36 bg-white dark:bg-[#2f2f2f] border border-slate-200 dark:border-white/5 rounded-xl shadow-2xl py-1 z-50 animate-fade-in">
+                      <div className="absolute bottom-full left-0 mb-2 w-44 bg-white dark:bg-[#2f2f2f] border border-slate-200 dark:border-white/5 rounded-xl shadow-2xl py-1.5 z-50 animate-fade-in">
                         <button
                           type="button"
                           onClick={() => {
                             setIsAttachmentDropdownOpen(false);
                             handleFileUploadClick();
                           }}
-                          className="w-full text-left px-4 py-2 text-sm text-slate-700 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2"
+                          className="w-full text-left px-4 py-2 text-xs font-medium text-slate-700 dark:text-white hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5 transition-colors"
                         >
-                          <Camera size={14} /> Media
+                          <Upload size={14} className="text-slate-500 dark:text-white/75" /> Upload photos & files
                         </button>
                       </div>
                     )}
@@ -1928,16 +2132,16 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
             </div>
 
             {/* Horizontal line of chips right below the input form, matching user screenshot style */}
-            <div className={`flex flex-wrap items-center justify-center gap-3 mt-4 select-none transition-all duration-300 ${(isInputFocused || chatInput.trim()) ? 'opacity-0 pointer-events-none h-0 mt-0 overflow-hidden' : 'opacity-100 animate-fade-in'}`}>
+            <div className={`flex flex-wrap items-center justify-center gap-3 mt-4 select-none transition-all duration-300 ${(chatInput.trim() || activeSessionId) ? 'opacity-0 pointer-events-none h-0 mt-0 overflow-hidden' : 'opacity-100 animate-fade-in'}`}>
               <button
                 type="button"
                 onClick={() => setActivePromptMode(activePromptMode === 'image' ? null : 'image')}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-full border text-[13px] font-normal transition-all duration-200 cursor-pointer shadow-sm ${activePromptMode === 'image'
-                    ? 'bg-pink-500/10 border-pink-500/40 text-pink-500 dark:text-pink-400'
-                    : 'bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/10'
+                  ? 'bg-pink-500/10 border-pink-500/40 text-pink-500 dark:text-pink-400'
+                  : 'bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/10'
                   }`}
               >
-                <Camera size={14} className={activePromptMode === 'image' ? "text-pink-500 animate-pulse" : "text-slate-500 dark:text-slate-400"} />
+                <Sparkles size={14} className={activePromptMode === 'image' ? "text-pink-500 animate-pulse" : "text-slate-500 dark:text-slate-400"} />
                 <span>Create an image</span>
               </button>
 
@@ -1945,11 +2149,11 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                 type="button"
                 onClick={() => setActivePromptMode(activePromptMode === 'code' ? null : 'code')}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-full border text-[13px] font-normal transition-all duration-200 cursor-pointer shadow-sm ${activePromptMode === 'code'
-                    ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/10'
+                  ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
+                  : 'bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/10'
                   }`}
               >
-                <Edit3 size={14} className={activePromptMode === 'code' ? "text-emerald-500 animate-pulse" : "text-slate-500 dark:text-slate-400"} />
+                <Code size={14} className={activePromptMode === 'code' ? "text-emerald-500 animate-pulse" : "text-slate-500 dark:text-slate-400"} />
                 <span>Write or edit</span>
               </button>
 
@@ -1957,11 +2161,11 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                 type="button"
                 onClick={() => setActivePromptMode(activePromptMode === 'search' ? null : 'search')}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-full border text-[13px] font-normal transition-all duration-200 cursor-pointer shadow-sm ${activePromptMode === 'search'
-                    ? 'bg-sky-500/10 border-sky-500/40 text-sky-600 dark:text-sky-400'
-                    : 'bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/10'
+                  ? 'bg-sky-500/10 border-sky-500/40 text-sky-600 dark:text-sky-400'
+                  : 'bg-slate-100 dark:bg-white/5 border-slate-300 dark:border-white/10 text-slate-600 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/10'
                   }`}
               >
-                <Globe size={14} className={activePromptMode === 'search' ? "text-sky-500 animate-pulse" : "text-slate-500 dark:text-slate-400"} />
+                <Search size={14} className={activePromptMode === 'search' ? "text-sky-500 animate-pulse" : "text-slate-500 dark:text-slate-400"} />
                 <span>Look something up</span>
               </button>
             </div>
@@ -2019,7 +2223,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
       {/* Create Project Modal Overlay */}
       {isProjectModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] px-4">
           <div className="w-full max-w-md bg-[#1e1e1e] border border-white/10 rounded-2xl shadow-2xl p-6">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium text-white">Create New Folder</h2>
@@ -2057,7 +2261,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
       {/* Delete Confirmation Modal */}
       {sessionToDelete && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-fade-in">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-[2px] z-[100] flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-[#1e1e1e] border border-white/10 rounded-2xl w-full max-w-sm p-6 shadow-2xl">
             <h3 className="text-lg font-medium text-white mb-2">Delete Chat</h3>
             <p className="text-sm text-slate-400 mb-6">
@@ -2086,21 +2290,21 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
       {/* Plan Upgrade Modal */}
       {isPlanModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md px-4 animate-fade-in">
-          <div className="w-full max-w-4xl bg-[#1e1e1e]/90 border border-white/10 rounded-3xl shadow-2xl p-6 md:p-8 flex flex-col relative max-h-[90vh] overflow-y-auto scrollbar">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-[2px] px-4 animate-fade-in">
+          <div className="w-full max-w-4xl bg-white dark:bg-[#1e1e1e] border border-slate-200 dark:border-white/10 rounded-3xl shadow-2xl p-6 md:p-8 flex flex-col relative max-h-[90vh] overflow-y-auto scrollbar text-slate-800 dark:text-white">
             {/* Header */}
-            <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/5">
+            <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100 dark:border-white/5">
               <div>
-                <h2 className="text-xl md:text-2xl font-bold text-white flex items-center gap-2">
-                  <Zap size={22} className="text-white fill-white animate-pulse" /> Upgrade Your Plan
+                <h2 className="text-xl md:text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Zap size={22} className="text-slate-800 dark:text-white fill-slate-800 dark:fill-white animate-pulse" /> Upgrade Your Plan
                 </h2>
-                <p className="text-xs md:text-sm text-slate-400 mt-1">
-                  Choose the plan that fits your workflow. Current Plan: <span className="text-white font-semibold uppercase">{user?.subscription_tier}</span>
+                <p className="text-xs md:text-sm text-slate-500 dark:text-slate-400 mt-1">
+                  Choose the plan that fits your workflow. Current Plan: <span className="text-slate-800 dark:text-white font-semibold uppercase">{user?.subscription_tier}</span>
                 </p>
               </div>
               <button
                 onClick={() => setIsPlanModalOpen(false)}
-                className="p-2 rounded-full hover:bg-white/5 text-slate-400 hover:text-white transition-colors"
+                className="p-2 rounded-full hover:bg-slate-150 dark:hover:bg-white/5 text-slate-450 hover:text-slate-800 dark:hover:text-white transition-colors"
                 title="Close"
               >
                 <X size={20} />
@@ -2110,9 +2314,9 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
             {/* Content Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {(pricingPlans.length > 0 ? pricingPlans : [
-                { tier: "free", display_name: "Starter – Free", base_price_usd: 0.0, gst_rate: 18.0 },
-                { tier: "premium", display_name: "Ultra", base_price_usd: 2.0, gst_rate: 18.0 },
-                { tier: "enterprise", display_name: "Infinity", base_price_usd: 4.0, gst_rate: 18.0 }
+                { tier: "free", display_name: "Free", base_price_usd: 0.0, gst_rate: 18.0 },
+                { tier: "premium", display_name: "Premium", base_price_usd: 2.0, gst_rate: 18.0 },
+                { tier: "enterprise", display_name: "Enterprise", base_price_usd: 4.0, gst_rate: 18.0 }
               ]).map((p) => {
                 const isCurrent = user?.subscription_tier === p.tier;
                 const priceUSD = p.base_price_usd;
@@ -2126,38 +2330,38 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                 return (
                   <div
                     key={p.tier}
-                    className={`glass-card p-6 rounded-2xl flex flex-col relative transition-all border ${isCurrent
-                      ? "border-white bg-white/5 shadow-[0_0_15px_rgba(255,255,255,0.08)]"
+                    className={`p-6 rounded-2xl flex flex-col relative transition-all border ${isCurrent
+                      ? "border-slate-800 dark:border-white bg-slate-100/50 dark:bg-white/10 shadow-md dark:shadow-[0_0_15px_rgba(255,255,255,0.08)]"
                       : planMeta.popular
-                        ? "border-white/20 bg-white/5 shadow-[0_0_15px_rgba(255,255,255,0.03)]"
-                        : "border-white/5 hover:border-white/20 bg-white/5"
+                        ? "border-slate-300 dark:border-white/20 bg-slate-50 dark:bg-white/5 shadow-sm dark:shadow-[0_0_15px_rgba(255,255,255,0.03)]"
+                        : "border-slate-200 dark:border-white/5 hover:border-slate-350 dark:hover:border-white/20 bg-transparent dark:bg-white/5"
                       }`}
                   >
                     {isCurrent && (
-                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white text-black font-extrabold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">
+                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-slate-900 dark:bg-white text-white dark:text-black font-extrabold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full border border-slate-250 dark:border-transparent">
                         Current Plan
                       </span>
                     )}
                     {!isCurrent && planMeta.popular && (
-                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white/80 text-black font-extrabold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">
+                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-slate-200 dark:bg-white/80 text-slate-850 dark:text-black font-extrabold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full border border-slate-300 dark:border-transparent">
                         Most Popular
                       </span>
                     )}
 
-                    <h3 className="text-lg font-bold text-white mb-1 mt-1">{p.display_name}</h3>
-                    <p className="text-[11px] text-slate-400 min-h-[32px] leading-relaxed mb-4">{planMeta.desc}</p>
+                    <h3 className="text-lg font-bold text-slate-850 dark:text-white mb-1 mt-1">{p.display_name}</h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 min-h-[32px] leading-relaxed mb-4">{planMeta.desc}</p>
 
                     <div className="flex items-baseline gap-1 mb-6">
-                      <span className="text-3xl font-extrabold text-white">
+                      <span className="text-3xl font-extrabold text-slate-900 dark:text-white">
                         {currencyInfo.symbol}{convertedPrice}
                       </span>
-                      <span className="text-xs text-slate-400">/month</span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">/month</span>
                     </div>
 
                     <ul className="space-y-3 mb-8 flex-1">
                       {planMeta.features.map((feat, fIdx) => (
-                        <li key={fIdx} className="flex items-start gap-2.5 text-xs text-slate-300">
-                          <Check size={14} className="text-white shrink-0 mt-0.5" />
+                        <li key={fIdx} className="flex items-start gap-2.5 text-xs text-slate-650 dark:text-slate-300">
+                          <Check size={14} className="text-slate-800 dark:text-white shrink-0 mt-0.5" />
                           <span className="leading-tight">{feat}</span>
                         </li>
                       ))}
@@ -2167,10 +2371,8 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                       onClick={() => !isCurrent && setPaymentConfirmPlan(p)}
                       disabled={isCurrent || isUpgrading}
                       className={`w-full py-2.5 rounded-xl font-bold text-xs transition-all ${isCurrent
-                        ? "bg-white/5 text-slate-500 cursor-default"
-                        : planMeta.popular
-                          ? "bg-white hover:bg-slate-200 text-black shadow-lg shadow-white/5 active:scale-98"
-                          : "bg-white/10 hover:bg-white/20 text-white active:scale-98"
+                        ? "bg-slate-100 dark:bg-white/5 text-slate-450 dark:text-slate-500 cursor-default"
+                        : "bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-200 text-white dark:text-black active:scale-98"
                         }`}
                     >
                       {isCurrent ? "Active Plan" : isUpgrading ? "Upgrading..." : "Select Plan"}
@@ -2185,27 +2387,27 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
       {/* Payment Confirmation Modal */}
       {paymentConfirmPlan && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md px-4 animate-fade-in">
-          <div className="w-full max-w-md bg-[#1e1e1e] border border-white/10 rounded-2xl shadow-2xl p-6 relative">
-            <h3 className="text-lg font-bold text-white mb-2">Confirm Payment</h3>
-            <p className="text-xs text-slate-400 mb-4">Please review the details for your new plan subscription.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-[2px] px-4 animate-fade-in">
+          <div className="w-full max-w-md bg-white dark:bg-[#1e1e1e] border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl p-6 relative text-slate-800 dark:text-white">
+            <h3 className="text-lg font-bold text-slate-855 dark:text-white mb-2">Confirm Payment</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">Please review the details for your new plan subscription.</p>
 
-            <div className="space-y-3 p-4 bg-white/5 rounded-xl border border-white/5 text-sm text-slate-300 mb-6">
+            <div className="space-y-3 p-4 bg-slate-50 dark:bg-white/5 rounded-xl border border-slate-100 dark:border-white/5 text-sm text-slate-600 dark:text-slate-300 mb-6">
               <div className="flex justify-between">
                 <span>Selected Plan</span>
-                <span className="font-bold text-white">{paymentConfirmPlan.display_name || paymentConfirmPlan.name}</span>
+                <span className="font-bold text-slate-855 dark:text-white">{paymentConfirmPlan.display_name || paymentConfirmPlan.name}</span>
               </div>
               <div className="flex justify-between">
                 <span>Subtotal</span>
-                <span>{currencyInfo.symbol}{(paymentConfirmPlan.base_price_usd * currencyInfo.rate).toFixed(2)}</span>
+                <span className="text-slate-850 dark:text-white font-medium">{currencyInfo.symbol}{(paymentConfirmPlan.base_price_usd * currencyInfo.rate).toFixed(2)}</span>
               </div>
-              <div className="flex justify-between text-xs text-slate-400">
+              <div className="flex justify-between text-xs text-slate-400 dark:text-slate-500">
                 <span>Tax / GST ({paymentConfirmPlan.gst_rate}%)</span>
                 <span>+{currencyInfo.symbol}{(paymentConfirmPlan.base_price_usd * (paymentConfirmPlan.gst_rate / 100) * currencyInfo.rate).toFixed(2)}</span>
               </div>
-              <div className="border-t border-white/10 my-2 pt-2 flex justify-between font-bold text-white text-base">
+              <div className="border-t border-slate-200 dark:border-white/10 my-2 pt-2 flex justify-between font-bold text-slate-855 dark:text-white text-base">
                 <span>Total Amount</span>
-                <span className="text-emerald-400">
+                <span className="text-slate-900 dark:text-white">
                   {currencyInfo.symbol}{(paymentConfirmPlan.base_price_usd * (1 + paymentConfirmPlan.gst_rate / 100) * currencyInfo.rate).toFixed(2)}
                 </span>
               </div>
@@ -2214,14 +2416,14 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setPaymentConfirmPlan(null)}
-                className="px-4 py-2 border border-white/10 hover:bg-white/5 text-slate-300 rounded-xl text-xs font-semibold"
+                className="px-4 py-2 border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/5 text-slate-600 dark:text-slate-350 rounded-xl text-xs font-semibold transition-all"
               >
                 Cancel
               </button>
               <button
                 onClick={() => handleExecuteUpgrade(paymentConfirmPlan.tier)}
                 disabled={isUpgrading}
-                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50"
+                className="px-5 py-2 bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-200 text-white dark:text-black rounded-xl text-xs font-bold transition-all disabled:opacity-50"
               >
                 {isUpgrading ? "Processing..." : "Confirm & Pay"}
               </button>
@@ -2231,7 +2433,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
       )}
       {/* Profile Modal */}
       {isProfileModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/70 backdrop-blur-[1px] px-4 animate-fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/70 backdrop-blur-[2px] px-4 animate-fade-in">
           <div className="w-full max-w-2xl bg-white dark:bg-[#1e1e1e]/95 border border-slate-200 dark:border-white/10 rounded-3xl shadow-2xl p-6 md:p-8 relative">
             {/* Header */}
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-200 dark:border-white/5">
@@ -2262,20 +2464,24 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
             <form onSubmit={handleProfileSubmit} className="space-y-5">
               {/* Avatar Display */}
               <div className="flex flex-col items-center gap-3">
-                <div className="w-24 h-24 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center overflow-hidden border-2 border-slate-200 dark:border-white/10">
-                  {(!profileAvatar && !user?.avatar_url) || avatarError ? (
-                    <User size={36} className="text-slate-300 dark:text-white/30" />
-                  ) : (
-                    <img src={profileAvatar || user?.avatar_url} alt="Profile" className="w-full h-full object-cover" onError={() => setAvatarError(true)} />
-                  )}
+                <div className="relative">
+                  <div className="w-24 h-24 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center overflow-hidden border-2 border-slate-200 dark:border-white/10">
+                    {(!profileAvatar && !user?.avatar_url) || avatarError ? (
+                      <User size={36} className="text-slate-300 dark:text-white/30" />
+                    ) : (
+                      <img src={profileAvatar || user?.avatar_url} alt="Profile" className="w-full h-full object-cover" onError={() => setAvatarError(true)} />
+                    )}
+                  </div>
+                  {/* Circular edit badge overlay */}
+                  <button
+                    type="button"
+                    onClick={() => avatarInputRef.current?.click()}
+                    className="absolute bottom-0 right-0 p-2 rounded-full bg-white dark:bg-[#2b2b2b] text-slate-800 dark:text-white border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-[#3b3b3b] shadow-lg transition-all flex items-center justify-center cursor-pointer active:scale-90"
+                    title="Change Photo"
+                  >
+                    <Upload size={14} />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => avatarInputRef.current?.click()}
-                  className="text-xs text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white transition-colors font-medium flex items-center gap-1.5"
-                >
-                  <Camera size={12} /> Change Photo
-                </button>
                 <input
                   ref={avatarInputRef}
                   type="file"
@@ -2320,7 +2526,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                 <button
                   type="button"
                   onClick={() => setIsProfileModalOpen(false)}
-                  className="px-4 py-2.5 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors"
+                  className="px-5 py-2.5 border border-slate-250 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 rounded-xl text-xs font-bold transition-all"
                 >
                   Cancel
                 </button>
@@ -2339,7 +2545,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
       {/* Appearance Modal */}
       {isAppearanceModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/70 backdrop-blur-[1px] px-4 animate-fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/70 backdrop-blur-[2px] px-4 animate-fade-in">
           <div className="w-full max-w-2xl bg-white dark:bg-[#1e1e1e]/95 border border-slate-200 dark:border-white/10 rounded-3xl shadow-2xl p-6 md:p-8 relative">
             {/* Header */}
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-200 dark:border-white/5">
@@ -2363,14 +2569,14 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                   key={mode}
                   onClick={() => setTheme(mode)}
                   className={`w-full text-left px-4 py-3 rounded-xl border transition-all text-sm ${theme === mode
-                      ? "bg-indigo-50 border-indigo-200 text-indigo-900 dark:bg-white/10 dark:border-white/20 dark:text-white"
-                      : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 dark:bg-[#252525] dark:border-white/5 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:border-white/10"
+                    ? "bg-slate-100 border-slate-300 text-slate-900 dark:bg-white/10 dark:border-white/20 dark:text-white"
+                    : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 dark:bg-[#252525] dark:border-white/5 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:border-white/10"
                     }`}
                 >
                   <div className="flex items-center justify-between">
                     <span>{label}</span>
                     {theme === mode && (
-                      <span className="text-xs font-semibold bg-indigo-600 text-white dark:bg-white dark:text-black px-2 py-0.5 rounded-full">Active</span>
+                      <span className="text-xs font-semibold bg-slate-900 text-white dark:bg-white dark:text-black px-2 py-0.5 rounded-full">Active</span>
                     )}
                   </div>
                 </button>
@@ -2380,9 +2586,10 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
         </div>
       )}
 
+
       {/* Settings Modal */}
       {isSettingsModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm px-4 animate-fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-[2px] px-4 animate-fade-in">
           <div className="w-full max-w-[850px] h-[650px] max-h-[85vh] bg-white dark:bg-[#212121] rounded-2xl shadow-2xl flex flex-col sm:flex-row overflow-hidden border border-slate-200 dark:border-white/5">
 
             {/* Sidebar Tabs */}
@@ -2407,6 +2614,15 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                   </button>
                 )}
                 <button
+                  onClick={() => setSettingsActiveTab("general")}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-all ${settingsActiveTab === "general"
+                    ? "bg-slate-200 text-slate-900 dark:bg-[#2f2f2f] dark:text-white font-semibold"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5"
+                    }`}
+                >
+                  <Settings size={18} className="shrink-0" /> General
+                </button>
+                <button
                   onClick={() => setSettingsActiveTab("account")}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13.5px] font-medium transition-all ${settingsActiveTab === "account"
                     ? "bg-slate-200 text-slate-900 dark:bg-[#2f2f2f] dark:text-white font-semibold"
@@ -2421,6 +2637,40 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
             {/* Tab Content */}
             <div className="flex-1 bg-white dark:bg-[#212121] overflow-y-auto p-6 sm:p-8 scrollbar">
+
+              {settingsActiveTab === "general" && (
+                <div className="animate-fade-in max-w-xl">
+                  <h2 className="text-xl font-medium text-slate-800 dark:text-white mb-2">General</h2>
+                  <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-6 pb-4 border-b border-slate-200 dark:border-white/5">Manage your system preference configurations.</p>
+
+                  <div className="flex flex-col gap-2 max-w-sm mt-4">
+                    <label className="text-xs font-semibold text-slate-655 dark:text-slate-350">System Currency</label>
+                    <p className="text-[11px] text-slate-500 mb-2">Choose the currency rate to display in plan prices. Defaults to your local region based on IP.</p>
+                    <select
+                      value={selectedCurrencyCode || "AUTO"}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedCurrencyCode(val === "AUTO" ? null : val);
+                        if (val === "AUTO") {
+                          localStorage.removeItem('astra_currency');
+                        } else {
+                          localStorage.setItem('astra_currency', val);
+                        }
+                      }}
+                      className="w-full px-4 py-3 rounded-xl bg-slate-50 dark:bg-darkCard border border-slate-200 dark:border-white/10 text-sm focus:border-slate-400 dark:focus:border-white/20 outline-none text-slate-800 dark:text-slate-200"
+                    >
+                      <option value="AUTO" className="bg-white dark:bg-[#212121]">
+                        🌐 Auto Detect ({autoCurrencyInfo.code} - {autoCurrencyInfo.symbol})
+                      </option>
+                      {ALL_CURRENCIES.map((c) => (
+                        <option key={c.code} value={c.code} className="bg-white dark:bg-[#212121]">
+                          {c.flag} {c.label} ({c.code} - {c.symbol})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
 
               {settingsActiveTab === "developer" && (
                 <div className="animate-fade-in max-w-xl">
@@ -2488,7 +2738,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                       <span className="text-[14px] text-slate-800 dark:text-white font-medium">Display Name</span>
                       <span className="text-[14px] text-slate-700 dark:text-slate-300 flex items-center gap-2">
                         {profileName || "Not set"}
-                        {!!user?.is_admin && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-mono">ADMIN</span>}
+                        {!!user?.is_admin && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/10 text-slate-300 dark:text-slate-300 font-mono">ADMIN</span>}
                       </span>
                     </div>
 
@@ -2511,8 +2761,8 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                           Platform Owner (Unlimited)
                         </span>
                       ) : (
-                        <span className="text-[14px] text-slate-700 dark:text-slate-300 capitalize flex items-center gap-2 cursor-pointer hover:text-slate-900 dark:hover:text-white">
-                          {user?.subscription_tier} <ChevronDown size={14} className="text-slate-500" />
+                        <span className="text-[14px] text-slate-700 dark:text-slate-300 capitalize font-semibold">
+                          {user?.subscription_tier}
                         </span>
                       )}
                     </div>
@@ -2524,14 +2774,22 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                         <span className="text-[14px] text-slate-800 dark:text-white font-medium">
                           {user?.is_admin ? "Owner Since" : "Member Since"}
                         </span>
-                        <span className="text-[14px] text-slate-700 dark:text-slate-300">{new Date(user.created_at).toLocaleDateString()}</span>
+                        <span className="text-[14px] text-slate-700 dark:text-slate-300">
+                          {(() => {
+                            const d = new Date(user.created_at);
+                            const day = String(d.getDate()).padStart(2, '0');
+                            const month = String(d.getMonth() + 1).padStart(2, '0');
+                            const year = d.getFullYear();
+                            return `${day}/${month}/${year}`;
+                          })()}
+                        </span>
                       </div>
                     )}
                     {!!user?.is_admin && (
-                      <div className="mt-6 p-4 rounded-2xl bg-indigo-500/5 border border-slate-200 dark:border-white/5 space-y-3">
-                        <div className="flex justify-between items-center">
-                          <span className="text-[11px] text-indigo-400 font-semibold uppercase tracking-wider">Root Owner System Metadata</span>
-                          <span className="px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 font-medium text-[9px] uppercase tracking-wider font-mono">Super Admin Access</span>
+                      <div className="mt-6 p-4 rounded-2xl bg-white/5 border border-slate-200 dark:border-white/5 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider">Root Owner System Metadata</span>
+                          <span className="px-2 py-0.5 rounded bg-white/10 text-slate-300 font-medium text-[9px] uppercase tracking-wider font-mono">Super Admin Access</span>
                         </div>
                         <div className="space-y-1.5 text-[11px] text-slate-400 leading-relaxed font-mono">
                           <div>• Node Authority: Full read, write, update, and database access</div>
@@ -2561,7 +2819,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                             <span className="block text-[14px] text-slate-800 dark:text-white font-medium">Delete account</span>
                             <span className="block text-[13px] text-slate-550 dark:text-slate-400 mt-0.5 max-w-[280px]">Permanently delete your profile account, credentials, and connection keys.</span>
                           </div>
-                          <button onClick={handleDeleteAccount} className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-full text-[13px] font-medium transition-all whitespace-nowrap self-start sm:self-center">
+                          <button onClick={handleDeleteAccount} className="px-4 py-2 border border-rose-500/30 hover:bg-rose-500/10 text-rose-500 rounded-full text-[13px] font-medium transition-all whitespace-nowrap self-start sm:self-center">
                             Delete
                           </button>
                         </div>
@@ -2581,7 +2839,7 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
 
       {/* Workspace Library Modal */}
       {isLibraryModalOpen && (
-        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 dark:bg-black/75 backdrop-blur-sm px-4 py-8 animate-fade-in">
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 dark:bg-black/75 backdrop-blur-[2px] px-4 py-8 animate-fade-in">
           <div className="w-full max-w-4xl h-[80vh] bg-white dark:bg-[#151515] border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-slide-up">
             {/* Header */}
             <div className="p-6 border-b border-slate-200 dark:border-white/5 flex items-center justify-between shrink-0 bg-slate-50 dark:bg-[#181818]">
@@ -2605,8 +2863,8 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                   type="button"
                   onClick={() => setLibraryActiveTab("images")}
                   className={`px-4 py-3 text-sm font-semibold border-b-2 transition-all ${libraryActiveTab === "images"
-                      ? "border-sky-500 text-sky-500 dark:text-sky-400 font-bold"
-                      : "border-transparent text-slate-550 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
+                    ? "border-sky-500 text-sky-500 dark:text-sky-400 font-bold"
+                    : "border-transparent text-slate-550 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
                     }`}
                 >
                   Images & Photos
@@ -2615,8 +2873,8 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                   type="button"
                   onClick={() => setLibraryActiveTab("files")}
                   className={`px-4 py-3 text-sm font-semibold border-b-2 transition-all ${libraryActiveTab === "files"
-                      ? "border-sky-500 text-sky-500 dark:text-sky-400 font-bold"
-                      : "border-transparent text-slate-550 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
+                    ? "border-sky-500 text-sky-500 dark:text-sky-400 font-bold"
+                    : "border-transparent text-slate-550 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"
                     }`}
                 >
                   Attached Files & PDFs
@@ -2779,9 +3037,9 @@ export const DashboardPage = ({ onNavigate, initialOpenSettings = false }) => {
                     }
                     if (dialogConfig.onConfirm) dialogConfig.onConfirm();
                   }}
-                  className={`px-4 py-2 rounded-xl text-sm font-medium text-white transition-all ${dialogConfig.danger
-                    ? "bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-600/20"
-                    : "bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-600/20"
+                  className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${dialogConfig.danger
+                    ? "bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/20"
+                    : "bg-white hover:bg-slate-200 text-black shadow-lg shadow-black/10"
                     }`}
                 >
                   {dialogConfig.confirmText || "OK"}

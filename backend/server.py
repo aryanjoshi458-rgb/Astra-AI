@@ -223,10 +223,32 @@ def init_db():
         updated_at TEXT
     )""")
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TEXT
+    )""")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS razorpay_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        razorpay_order_id TEXT UNIQUE,
+        tier TEXT,
+        amount_paise INTEGER,
+        currency TEXT DEFAULT 'INR',
+        status TEXT DEFAULT 'created',
+        razorpay_payment_id TEXT,
+        created_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )""")
+
     conn.commit()
 
     # Clear active sessions on server startup to ensure logout when server is restarted/off
     try:
+        cursor.execute("INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES ('site_views', '0', ?)", (datetime.datetime.now().isoformat(),))
         cursor.execute("DELETE FROM active_sessions")
         conn.commit()
         print("[Database] Cleared active sessions on startup.")
@@ -324,9 +346,9 @@ def init_db():
     cur2 = conn2.cursor()
     now_str = datetime.datetime.now().isoformat()
     default_plans = [
-        ('free',       'Starter – Free',    0.0,  18.0),
-        ('premium',    'Ultra',             2.0,  18.0),
-        ('enterprise', 'Infinity',          4.0,  18.0),
+        ('free',       'Free',              0.0,  18.0),
+        ('premium',    'Premium',           2.0,  18.0),
+        ('enterprise', 'Enterprise',        4.0,  18.0),
     ]
     for tier, name, price, gst in default_plans:
         cur2.execute("SELECT id FROM plan_config WHERE tier = ?", (tier,))
@@ -380,6 +402,21 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed_url.query)
         
         try:
+            # 0. PUBLIC PAYMENT CONFIG: GET /api/payment/config (no auth required)
+            if path == "/api/payment/config":
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("SELECT value FROM app_config WHERE key = 'razorpay_key_id'")
+                    row = cursor.fetchone()
+                    key_id = row['value'] if row and row['value'] else ''
+                except Exception:
+                    key_id = ''
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"key_id": key_id, "configured": bool(key_id)}).encode())
+                return
+
             # 1. USER PROFILE: /api/user/profile
             if path == "/api/user/profile":
                 user = get_user_from_headers(self.headers, conn)
@@ -527,8 +564,16 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 premium_users = cursor.execute("SELECT COUNT(id) FROM users WHERE subscription_tier != 'free'").fetchone()[0]
                 active_keys = cursor.execute("SELECT COUNT(id) FROM api_keys WHERE is_active = 1").fetchone()[0]
                 
+                # Fetch site_views
+                cursor.execute("SELECT value FROM app_config WHERE key = 'site_views'")
+                row = cursor.fetchone()
+                site_views = int(row['value']) if row else 0
+
                 tokens_sum = cursor.execute("SELECT SUM(tokens_used) FROM usage_stats").fetchone()[0] or 0
                 requests_sum = cursor.execute("SELECT SUM(requests_count) FROM usage_stats").fetchone()[0] or 0
+                
+                # Calculate estimated revenue in INR (say, 199 per premium user)
+                total_revenue = premium_users * 199
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -539,7 +584,9 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                     "total_messages": total_messages,
                     "premium_users": premium_users,
                     "active_keys": active_keys,
-                    "monthly_requests": requests_sum
+                    "monthly_requests": requests_sum,
+                    "site_views": site_views,
+                    "revenue": total_revenue
                 }).encode())
                 return
 
@@ -617,9 +664,9 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                     )""")
                     now_str = datetime.datetime.now().isoformat()
                     default_plans = [
-                        ('free',       'Starter – Free',    0.0,  18.0),
-                        ('premium',    'Ultra',             2.0,  18.0),
-                        ('enterprise', 'Infinity',          4.0,  18.0),
+                        ('free',       'Free',              0.0,  18.0),
+                        ('premium',    'Premium',           2.0,  18.0),
+                        ('enterprise', 'Enterprise',        4.0,  18.0),
                     ]
                     for tier, name, price, gst in default_plans:
                         cursor.execute(
@@ -636,6 +683,22 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(plans).encode())
                 return
                 
+            # 10. ADMIN APP CONFIG: GET /api/admin/config
+            if path == "/api/admin/config":
+                user_chk = get_user_from_headers(self.headers, conn)
+                if not user_chk or not user_chk['is_admin']:
+                    self.send_error_json(403, "Access denied")
+                    return
+                cursor = conn.cursor()
+                cursor.execute("SELECT key, value FROM app_config")
+                rows = cursor.fetchall()
+                config = {r['key']: r['value'] for r in rows}
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(config).encode())
+                return
+
             # Default health gateway
             if path == "/":
                 self.send_response(200)
@@ -648,6 +711,18 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 }).encode())
                 return
                 
+            # PUBLIC PAYMENT CONFIG: GET /api/payment/config (returns only public key_id)
+            if path == "/api/payment/config":
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM app_config WHERE key = 'razorpay_key_id'")
+                row = cursor.fetchone()
+                key_id = row['value'] if row and row['value'] else ''
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"key_id": key_id, "configured": bool(key_id)}).encode())
+                return
+
             self.send_error_json(404, "Endpoint path not found")
         except Exception as e:
             print(f"[Error] GET handler request failed: {e}")
@@ -672,13 +747,28 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+            # 0. ANALYTICS VISIT: POST /api/analytics/visit
+            if path == "/api/analytics/visit":
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM app_config WHERE key = 'site_views'")
+                row = cursor.fetchone()
+                val = int(row['value']) if row and row['value'] else 0
+                new_val = val + 1
+                cursor.execute("INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES ('site_views', ?, ?)",
+                               (str(new_val), datetime.datetime.now().isoformat()))
+                conn.commit()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success", "site_views": new_val}).encode())
+                return
+
             # 1. REGISTER USER: /api/auth/register
             if path == "/api/auth/register":
                 email = body.get("email")
-                password = body.get("password")
                 full_name = body.get("full_name")
-                if not email or not password:
-                    self.send_error_json(400, "Missing email or password credentials")
+                if not email:
+                    self.send_error_json(400, "Missing email credential")
                     return
                 
                 cursor = conn.cursor()
@@ -688,7 +778,6 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                     self.send_error_json(400, "Email already registered")
                     return
                 
-                h = hashlib.sha256(password.encode()).hexdigest()
                 now = datetime.datetime.now().isoformat()
                 
                 # Check if first user, make admin
@@ -698,7 +787,7 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 cursor.execute("""
                     INSERT INTO users (email, password_hash, full_name, is_admin, subscription_tier, created_at, login_provider)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (email, h, full_name or email.split("@")[0].capitalize(), is_admin, "free", now, 'email'))
+                """, (email, "", full_name or email.split("@")[0].capitalize(), is_admin, "free", now, 'email'))
                 user_id = cursor.lastrowid
                 conn.commit()
                 
@@ -711,43 +800,6 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps(user_row).encode())
-                return
-
-            # 2. CLASSIC LOGIN: /api/auth/login/classic
-            if path == "/api/auth/login/classic":
-                email = body.get("email")
-                password = body.get("password")
-                if not email or not password:
-                    self.send_error_json(400, "Missing credentials")
-                    return
-                
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
-                user = cursor.fetchone()
-                if not user:
-                    self.send_error_json(401, "Incorrect email or password")
-                    return
-                
-                h = hashlib.sha256(password.encode()).hexdigest()
-                if user['password_hash'] != h:
-                    self.send_error_json(401, "Incorrect credentials")
-                    return
-                
-                if not user['is_active']:
-                    self.send_error_json(400, "Account deactivated")
-                    return
-                
-                # Generate unique token
-                token = "astra_sess_" + str(uuid.uuid4())
-                cursor = conn.cursor()
-                cursor.execute("INSERT OR REPLACE INTO active_sessions (token, email, created_at) VALUES (?, ?, ?)", 
-                               (token, email, datetime.datetime.now().isoformat()))
-                conn.commit()
-                
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"access_token": token, "token_type": "bearer"}).encode())
                 return
 
             # 3. SOCIAL GOOGLE LOGIN: /api/auth/google
@@ -1392,6 +1444,171 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 }).encode())
                 return
 
+            # RAZORPAY: CREATE ORDER: POST /api/payment/create-order
+            if path == "/api/payment/create-order":
+                pay_user = get_user_from_headers(self.headers, conn)
+                if not pay_user:
+                    self.send_error_json(401, "Unauthorized")
+                    return
+                tier = body.get("tier")
+                amount_inr = body.get("amount_inr")  # full amount with GST in INR (integer paise)
+                if not tier or amount_inr is None:
+                    self.send_error_json(400, "Missing tier or amount_inr")
+                    return
+
+                # Fetch Razorpay Key ID & Secret from app_config
+                cursor = conn.cursor()
+                cursor.execute("SELECT key, value FROM app_config WHERE key IN ('razorpay_key_id', 'razorpay_key_secret')")
+                cfg_rows = cursor.fetchall()
+                cfg = {r['key']: r['value'] for r in cfg_rows}
+                rz_key_id = cfg.get('razorpay_key_id', '')
+                rz_key_secret = cfg.get('razorpay_key_secret', '')
+
+                if not rz_key_id or not rz_key_secret:
+                    self.send_error_json(503, "Razorpay not configured. Admin must add Razorpay keys in Settings.")
+                    return
+
+                # Create order via Razorpay REST API
+                import base64, hmac, hashlib as _hashlib
+                amount_paise = int(float(amount_inr) * 100)
+                order_payload = json.dumps({
+                    "amount": amount_paise,
+                    "currency": "INR",
+                    "receipt": f"astra_{pay_user['id']}_{tier}_{int(time.time())}",
+                    "notes": {"user_id": str(pay_user['id']), "tier": tier}
+                }).encode('utf-8')
+                credentials = base64.b64encode(f"{rz_key_id}:{rz_key_secret}".encode()).decode()
+                rz_req = urllib.request.Request(
+                    "https://api.razorpay.com/v1/orders",
+                    data=order_payload,
+                    headers={
+                        'Authorization': f'Basic {credentials}',
+                        'Content-Type': 'application/json'
+                    },
+                    method='POST'
+                )
+                try:
+                    with urllib.request.urlopen(rz_req, timeout=15) as rz_resp:
+                        rz_data = json.loads(rz_resp.read().decode('utf-8'))
+                except Exception as rz_err:
+                    print(f"[Razorpay] Order creation failed: {rz_err}")
+                    self.send_error_json(502, f"Razorpay order creation failed: {str(rz_err)}")
+                    return
+
+                now_str = datetime.datetime.now().isoformat()
+                cursor.execute(
+                    "INSERT INTO razorpay_orders (user_id, razorpay_order_id, tier, amount_paise, currency, status, created_at) VALUES (?, ?, ?, ?, 'INR', 'created', ?)",
+                    (pay_user['id'], rz_data.get('id'), tier, amount_paise, now_str)
+                )
+                conn.commit()
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "order_id": rz_data.get('id'),
+                    "amount": amount_paise,
+                    "currency": "INR",
+                    "key_id": rz_key_id
+                }).encode())
+                return
+
+            # RAZORPAY: VERIFY PAYMENT & UPGRADE: POST /api/payment/verify
+            if path == "/api/payment/verify":
+                pay_user = get_user_from_headers(self.headers, conn)
+                if not pay_user:
+                    self.send_error_json(401, "Unauthorized")
+                    return
+                razorpay_order_id = body.get("razorpay_order_id")
+                razorpay_payment_id = body.get("razorpay_payment_id")
+                razorpay_signature = body.get("razorpay_signature")
+                tier = body.get("tier")
+                if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature, tier]):
+                    self.send_error_json(400, "Missing payment verification fields")
+                    return
+
+                # Fetch Razorpay secret
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM app_config WHERE key = 'razorpay_key_secret'")
+                secret_row = cursor.fetchone()
+                rz_secret = secret_row['value'] if secret_row else ''
+                if not rz_secret:
+                    self.send_error_json(503, "Razorpay not configured")
+                    return
+
+                # Verify HMAC-SHA256 signature
+                import hmac as _hmac
+                expected_sig = _hmac.new(
+                    rz_secret.encode(),
+                    f"{razorpay_order_id}|{razorpay_payment_id}".encode(),
+                    hashlib.sha256
+                ).hexdigest()
+                if expected_sig != razorpay_signature:
+                    self.send_error_json(400, "Payment signature verification failed")
+                    return
+
+                # Upgrade subscription
+                limit = 5
+                if tier == "premium":
+                    limit = 20
+                elif tier == "enterprise":
+                    limit = 100
+                cursor.execute("UPDATE users SET subscription_tier = ?, api_key_limit = ? WHERE id = ?", (tier, limit, pay_user['id']))
+                # Update order status
+                cursor.execute("UPDATE razorpay_orders SET status = 'paid', razorpay_payment_id = ? WHERE razorpay_order_id = ?",
+                               (razorpay_payment_id, razorpay_order_id))
+                conn.commit()
+
+                cursor.execute("SELECT * FROM users WHERE id = ?", (pay_user['id'],))
+                updated = dict(cursor.fetchone())
+                updated['is_admin'] = bool(updated['is_admin'])
+                updated['is_active'] = bool(updated['is_active'])
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"message": f"Subscription upgraded to {tier.upper()}!", "user": updated}).encode())
+                return
+
+            # SIMPLE PAYMENT UPGRADE: POST /api/payment/upgrade
+            # Called after client-side Razorpay payment success (key_id only flow)
+            if path == "/api/payment/upgrade":
+                pay_user = get_user_from_headers(self.headers, conn)
+                if not pay_user:
+                    self.send_error_json(401, "Unauthorized")
+                    return
+                tier = body.get("tier")
+                payment_id = body.get("payment_id", "")
+                if not tier:
+                    self.send_error_json(400, "Missing tier")
+                    return
+                limit = 5
+                if tier == "premium":
+                    limit = 20
+                elif tier == "enterprise":
+                    limit = 100
+                cursor = conn.cursor()
+                cursor.execute("UPDATE users SET subscription_tier = ?, api_key_limit = ? WHERE id = ?", (tier, limit, pay_user['id']))
+                # Log it
+                now_str = datetime.datetime.now().isoformat()
+                try:
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO razorpay_orders (user_id, razorpay_order_id, tier, amount_paise, currency, status, razorpay_payment_id, created_at) VALUES (?, ?, ?, ?, 'INR', 'paid', ?, ?)",
+                        (pay_user['id'], payment_id or f"direct_{int(time.time())}", tier, 0, payment_id, now_str)
+                    )
+                except Exception:
+                    pass
+                conn.commit()
+                cursor.execute("SELECT * FROM users WHERE id = ?", (pay_user['id'],))
+                updated = dict(cursor.fetchone())
+                updated['is_admin'] = bool(updated['is_admin'])
+                updated['is_active'] = bool(updated['is_active'])
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"message": f"Subscription upgraded to {tier.upper()}!", "user": updated}).encode())
+                return
+
             self.send_error_json(404, "Endpoint not found")
         except Exception as e:
             print(f"[Error] POST request failed: {e}")
@@ -1666,6 +1883,29 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps(updated_plans).encode())
+                return
+
+            # 8. ADMIN SAVE APP CONFIG: PUT /api/admin/config
+            if path == "/api/admin/config":
+                if not user['is_admin']:
+                    self.send_error_json(403, "Access denied")
+                    return
+                config_data = body  # dict of key->value
+                now_str = datetime.datetime.now().isoformat()
+                cursor = conn.cursor()
+                for k, v in config_data.items():
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)",
+                        (k, str(v) if v else '', now_str)
+                    )
+                conn.commit()
+                cursor.execute("SELECT key, value FROM app_config")
+                rows = cursor.fetchall()
+                result = {r['key']: r['value'] for r in rows}
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
                 return
 
             self.send_error_json(404, "Endpoint not found")
