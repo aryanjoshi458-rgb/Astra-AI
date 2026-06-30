@@ -15,7 +15,7 @@ except ImportError:
     REPORTLAB_AVAILABLE = False
 
 from app import models, schemas, auth
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.services.ai_service import AIService
 
 logger = logging.getLogger("astra_ai.chat_router")
@@ -167,6 +167,10 @@ async def stream_message(
     usage.requests_count += 1
     db.commit()
 
+    # Extract IDs before generator to avoid DetachedInstanceError on async execution after request returns
+    current_user_id = current_user.id
+    session_id_val = session.id
+
     # 4. Stream response generator
     async def response_generator():
         accumulated_response = ""
@@ -185,10 +189,10 @@ async def stream_message(
 
         # Generator completed: save Assistant Message to Database
         # Note: We open a new database session because the generator is evaluated asynchronously
-        db_gen = next(get_db())
+        db_gen = SessionLocal()
         try:
             assistant_msg = models.Message(
-                session_id=session.id,
+                session_id=session_id_val,
                 sender="assistant",
                 content=accumulated_response,
                 model_used=payload.model_used or "astra-gpt-4"
@@ -197,12 +201,12 @@ async def stream_message(
             
             # Simple token estimation (approx 4 chars per token)
             tokens = (len(payload.content) + len(accumulated_response)) // 4
-            gen_usage = db_gen.query(models.UsageStats).filter(models.UsageStats.user_id == current_user.id).first()
+            gen_usage = db_gen.query(models.UsageStats).filter(models.UsageStats.user_id == current_user_id).first()
             if gen_usage:
                 gen_usage.tokens_used += tokens
             
             # Auto-rename chat if it is default 'New Chat'
-            db_session = db_gen.query(models.ChatSession).filter(models.ChatSession.id == session.id).first()
+            db_session = db_gen.query(models.ChatSession).filter(models.ChatSession.id == session_id_val).first()
             if db_session and db_session.title == "New Chat":
                 short_title = payload.content[:30] + ("..." if len(payload.content) > 30 else "")
                 db_session.title = short_title
