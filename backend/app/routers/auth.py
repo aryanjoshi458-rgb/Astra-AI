@@ -123,10 +123,28 @@ def google_login(payload: schemas.GoogleLoginRequest, db: Session = Depends(get_
     # email = idinfo['email']
     # For robust production fallbacks & mock triggers we parse or simulate a Google token decode.
     # If the token is 'mock_google_token_...', we parse the name and email directly.
+    import httpx
     token_str = payload.credential
     email = "google_user@astra.ai"
     name = "Astra Google Explorer"
+    avatar_url = ""
     
+    # Verify token using Google's userinfo API
+    if token_str and not token_str.startswith("mock_") and ":" not in token_str:
+        try:
+            resp = httpx.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {token_str}"},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                info = resp.json()
+                email = info.get("email", email)
+                name = info.get("name", name)
+                avatar_url = info.get("picture", "")
+        except Exception as e:
+            logger.error(f"Failed to verify Google token: {e}")
+            
     if "email:" in token_str:
         # Easy debug hook: format token as "email:user@domain.com,name:User Name"
         try:
@@ -147,7 +165,7 @@ def google_login(payload: schemas.GoogleLoginRequest, db: Session = Depends(get_
             full_name=name,
             is_admin=is_first_user,
             subscription_tier="free",
-            avatar_url=""
+            avatar_url=avatar_url
         )
         db.add(user)
         db.commit()

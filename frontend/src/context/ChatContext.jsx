@@ -283,6 +283,7 @@ export const ChatProvider = ({ children }) => {
 
       // 4. Stream completed successfully: reload sessions to update titles/messages
       await loadSessions();
+      await new Promise((r) => setTimeout(r, 500));
       await loadSessionDetail(sessionId, false);
       
     } catch (err) {
