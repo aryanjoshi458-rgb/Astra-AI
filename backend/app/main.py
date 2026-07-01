@@ -53,6 +53,48 @@ app.include_router(user.router)
 app.include_router(admin.router)
 app.include_router(ai.router)
 
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from fastapi import HTTPException
+from app import models, auth
+from app.database import get_db
+
+class ProjectCreate(BaseModel):
+    name: str
+
+@app.get("/api/projects")
+def list_projects(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    projects = db.query(models.Project).filter(models.Project.user_id == current_user.id).order_by(models.Project.created_at.desc()).all()
+    return projects
+
+@app.post("/api/projects")
+def create_project(
+    payload: ProjectCreate,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    new_project = models.Project(user_id=current_user.id, name=payload.name)
+    db.add(new_project)
+    db.commit()
+    db.refresh(new_project)
+    return new_project
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(
+    project_id: int,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(models.Project).filter(models.Project.id == project_id, models.Project.user_id == current_user.id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    db.delete(project)
+    db.commit()
+    return {"message": "Project deleted successfully"}
+
 @app.get("/")
 def read_root():
     return {

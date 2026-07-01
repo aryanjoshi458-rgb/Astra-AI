@@ -106,3 +106,15 @@ class OTPVerification(Base):
     otp_code = Column(String(10), nullable=False)
     expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PlanConfig(Base):
+    __tablename__ = "plan_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tier = Column(String(50), unique=True, nullable=False)
+    display_name = Column(String(100), nullable=False)
+    base_price_usd = Column(Float, default=0.0)
+    gst_rate = Column(Float, default=18.0)
+    is_active = Column(Boolean, default=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

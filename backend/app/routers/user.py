@@ -111,3 +111,19 @@ def delete_account(
     db.delete(current_user)
     db.commit()
     return {"message": "Account deleted successfully"}
+
+@router.post("/heartbeat")
+def send_heartbeat(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    import datetime
+    current_user.last_active_at = datetime.datetime.now().isoformat()
+    current_user.total_time_spent = (current_user.total_time_spent or 0) + 30
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "status": "success",
+        "last_active_at": current_user.last_active_at,
+        "total_time_spent": current_user.total_time_spent
+    }

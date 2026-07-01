@@ -106,3 +106,49 @@ def monitor_recent_chats(
             "updated_at": s.updated_at
         })
     return chats_data
+
+from pydantic import BaseModel
+class PlanConfigItem(BaseModel):
+    tier: str
+    display_name: str
+    base_price_usd: float
+    gst_rate: float
+
+class PricingUpdatePayload(BaseModel):
+    plans: List[PlanConfigItem]
+
+@router.get("/pricing")
+def get_pricing_config(
+    current_admin: models.User = Depends(auth.get_current_admin),
+    db: Session = Depends(get_db)
+):
+    plans = db.query(models.PlanConfig).order_by(models.PlanConfig.id).all()
+    if not plans:
+        # Seed default plan configs if empty
+        default_plans = [
+            models.PlanConfig(tier="free", display_name="Free", base_price_usd=0.0, gst_rate=18.0),
+            models.PlanConfig(tier="premium", display_name="Premium", base_price_usd=2.0, gst_rate=18.0),
+            models.PlanConfig(tier="enterprise", display_name="Enterprise", base_price_usd=4.0, gst_rate=18.0)
+        ]
+        for p in default_plans:
+            db.add(p)
+        db.commit()
+        plans = db.query(models.PlanConfig).order_by(models.PlanConfig.id).all()
+    return plans
+
+@router.put("/pricing")
+def update_pricing_config(
+    payload: PricingUpdatePayload,
+    current_admin: models.User = Depends(auth.get_current_admin),
+    db: Session = Depends(get_db)
+):
+    now = datetime.datetime.utcnow()
+    for p in payload.plans:
+        plan = db.query(models.PlanConfig).filter(models.PlanConfig.tier == p.tier).first()
+        if plan:
+            plan.display_name = p.display_name
+            plan.base_price_usd = p.base_price_usd
+            plan.gst_rate = p.gst_rate
+            plan.updated_at = now
+    db.commit()
+    return db.query(models.PlanConfig).order_by(models.PlanConfig.id).all()
