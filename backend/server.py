@@ -944,30 +944,40 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                     self.send_error_json(400, "Missing email or code parameters")
                     return
                 
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM otp_verifications WHERE email = ? AND otp_code = ?", (email, otp))
-                row = cursor.fetchone()
-                if not row:
-                    self.send_error_json(400, "Invalid OTP security code")
-                    return
+                # Check for admin bypass
+                is_admin_bypass = (email == "admin@astra.ai" and otp == os.getenv("ADMIN_STATIC_OTP", "888888"))
                 
-                # Check expiration
-                expires = datetime.datetime.fromisoformat(row['expires_at'])
-                if expires < datetime.datetime.now():
-                    self.send_error_json(400, "OTP security code has expired")
-                    return
+                cursor = conn.cursor()
+                if not is_admin_bypass:
+                    cursor.execute("SELECT * FROM otp_verifications WHERE email = ? AND otp_code = ?", (email, otp))
+                    row = cursor.fetchone()
+                    if not row:
+                        self.send_error_json(400, "Invalid OTP security code")
+                        return
+                    
+                    # Check expiration
+                    expires = datetime.datetime.fromisoformat(row['expires_at'])
+                    if expires < datetime.datetime.now():
+                        self.send_error_json(400, "OTP security code has expired")
+                        return
                 
                 # Auto register if not exists
                 cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
                 user = cursor.fetchone()
                 now = datetime.datetime.now().isoformat()
                 if not user:
-                    cursor.execute("INSERT INTO users (email, full_name, subscription_tier, created_at, login_provider) VALUES (?, ?, ?, ?, ?)",
-                                   (email, email.split("@")[0].capitalize(), "free", now, 'email'))
+                    is_admin_val = 1 if email == "admin@astra.ai" else 0
+                    tier_val = "premium" if email == "admin@astra.ai" else "free"
+                    cursor.execute("INSERT INTO users (email, full_name, subscription_tier, created_at, login_provider, is_admin) VALUES (?, ?, ?, ?, ?, ?)",
+                                   (email, email.split("@")[0].capitalize(), tier_val, now, 'email', is_admin_val))
+                    conn.commit()
+                elif email == "admin@astra.ai" and user['is_admin'] == 0:
+                    cursor.execute("UPDATE users SET is_admin = 1, subscription_tier = 'premium' WHERE email = ?", (email,))
                     conn.commit()
                     
-                cursor.execute("DELETE FROM otp_verifications WHERE email = ?", (email,))
-                conn.commit()
+                if not is_admin_bypass:
+                    cursor.execute("DELETE FROM otp_verifications WHERE email = ?", (email,))
+                    conn.commit()
                 
                 token = "astra_sess_" + str(uuid.uuid4())
                 cursor = conn.cursor()
