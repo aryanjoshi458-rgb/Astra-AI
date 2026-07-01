@@ -884,11 +884,7 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                     self.send_error_json(400, "Missing email parameter")
                     return
                 
-                if email == "admin@astra.ai":
-                    # Admin: Use static OTP from environment variables (defaults to 888888)
-                    otp = os.getenv("ADMIN_STATIC_OTP", "888888")
-                else:
-                    otp = "".join(random.choices("0123456789", k=6))
+                otp = "".join(random.choices("0123456789", k=6))
                 expires = (datetime.datetime.now() + datetime.timedelta(minutes=5)).isoformat()
                 now = datetime.datetime.now().isoformat()
                 
@@ -914,13 +910,14 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                                (email, otp, expires, now))
                 conn.commit()
                 
-                # Send actual email via SMTP helper (exclude admin)
+                # Send actual email via SMTP helper
                 if email == "admin@astra.ai":
-                    # Admin: Only print to terminal, do not email
+                    # Admin: Send OTP code to their personal email address
+                    email_sent = send_otp_email("dharambhai376@gmail.com", otp)
+                    # Also print to terminal for local debugging convenience
                     print("\n" + "="*50, flush=True)
-                    print(f"| ASTRA AI OTP SECURITY CODE FOR {email}:  {otp}  |", flush=True)
+                    print(f"| ASTRA AI OTP SECURITY CODE FOR ADMIN:  {otp} (Sent to dharambhai376@gmail.com) |", flush=True)
                     print("="*50 + "\n", flush=True)
-                    email_sent = False
                 else:
                     # User: Only send email, NEVER print to terminal under any circumstances
                     email_sent = send_otp_email(email, otp)
@@ -928,9 +925,7 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                if email == "admin@astra.ai":
-                    self.wfile.write(json.dumps({"message": f"Admin OTP printed in console logs."}).encode())
-                elif email_sent:
+                if email_sent:
                     self.wfile.write(json.dumps({"message": f"OTP verification code sent to your email address."}).encode())
                 else:
                     self.wfile.write(json.dumps({"message": f"Failed to send verification email. Please check SMTP configuration."}).encode())
