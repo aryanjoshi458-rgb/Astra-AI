@@ -231,6 +231,12 @@ def init_db():
     )""")
 
     cursor.execute("""
+    CREATE TABLE IF NOT EXISTS visitor_ips (
+        ip TEXT PRIMARY KEY,
+        created_at TEXT
+    )""")
+
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS razorpay_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -561,7 +567,7 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 total_users = cursor.execute("SELECT COUNT(id) FROM users").fetchone()[0]
                 total_chats = cursor.execute("SELECT COUNT(id) FROM chat_sessions").fetchone()[0]
                 total_messages = cursor.execute("SELECT COUNT(id) FROM messages").fetchone()[0]
-                premium_users = cursor.execute("SELECT COUNT(id) FROM users WHERE subscription_tier != 'free'").fetchone()[0]
+                premium_users = cursor.execute("SELECT COUNT(id) FROM users WHERE subscription_tier != 'free' AND is_admin = 0").fetchone()[0]
                 active_keys = cursor.execute("SELECT COUNT(id) FROM api_keys WHERE is_active = 1").fetchone()[0]
                 
                 # Fetch site_views
@@ -749,18 +755,29 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
 
             # 0. ANALYTICS VISIT: POST /api/analytics/visit
             if path == "/api/analytics/visit":
+                ip = self.client_address[0]
                 cursor = conn.cursor()
+                cursor.execute("SELECT ip FROM visitor_ips WHERE ip = ?", (ip,))
+                exists = cursor.fetchone()
+                
+                # Fetch current views
                 cursor.execute("SELECT value FROM app_config WHERE key = 'site_views'")
                 row = cursor.fetchone()
                 val = int(row['value']) if row and row['value'] else 0
-                new_val = val + 1
-                cursor.execute("INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES ('site_views', ?, ?)",
-                               (str(new_val), datetime.datetime.now().isoformat()))
-                conn.commit()
+                
+                if not exists:
+                    # New unique visitor!
+                    new_val = val + 1
+                    cursor.execute("INSERT INTO visitor_ips (ip, created_at) VALUES (?, ?)", (ip, datetime.datetime.now().isoformat()))
+                    cursor.execute("INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES ('site_views', ?, ?)",
+                                   (str(new_val), datetime.datetime.now().isoformat()))
+                    conn.commit()
+                    val = new_val
+                
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"status": "success", "site_views": new_val}).encode())
+                self.wfile.write(json.dumps({"status": "success", "site_views": val}).encode())
                 return
 
             # 1. REGISTER USER: /api/auth/register
@@ -1034,6 +1051,46 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
                 self.wfile.write(json.dumps({"status": "success", "last_active_at": now}).encode())
+                return
+
+            # 6. SYSTEM RESET: /api/admin/reset
+            if path == "/api/admin/reset":
+                user = get_user_from_headers(self.headers, conn)
+                if not user or user['is_admin'] == 0:
+                    self.send_error_json(403, "Access denied")
+                    return
+                cursor = conn.cursor()
+                # 1. Delete all API keys
+                cursor.execute("DELETE FROM api_keys")
+                # 2. Delete all usage stats
+                cursor.execute("DELETE FROM usage_stats")
+                # 3. Delete all messages
+                cursor.execute("DELETE FROM messages")
+                # 4. Delete all chat sessions
+                cursor.execute("DELETE FROM chat_sessions")
+                # 5. Delete all projects
+                cursor.execute("DELETE FROM projects")
+                # 6. Delete all OTP records
+                cursor.execute("DELETE FROM otp_verifications")
+                # 7. Delete all users except current admin
+                cursor.execute("DELETE FROM users WHERE id != ?", (user['id'],))
+                # 8. Force fresh login for all other users by deleting their active sessions
+                auth_header = self.headers.get("Authorization", "")
+                admin_token = auth_header.split(" ")[1] if auth_header.startswith("Bearer ") else ""
+                if admin_token:
+                    cursor.execute("DELETE FROM active_sessions WHERE token != ?", (admin_token,))
+                else:
+                    cursor.execute("DELETE FROM active_sessions")
+                # 9. Reset site visitor count
+                cursor.execute("UPDATE app_config SET value = '0' WHERE key = 'site_views'")
+                cursor.execute("DELETE FROM visitor_ips")
+                
+                conn.commit()
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success", "message": "Platform reset completed successfully."}).encode())
                 return
 
             # 7. GENERATE DEVELOPER API KEY: /api/user/keys

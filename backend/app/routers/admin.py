@@ -1,4 +1,5 @@
 from typing import List
+import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app import models, schemas, auth
@@ -14,7 +15,7 @@ def get_admin_stats(
     total_users = db.query(models.User).count()
     total_chats = db.query(models.ChatSession).count()
     total_messages = db.query(models.Message).count()
-    premium_users = db.query(models.User).filter(models.User.subscription_tier != "free").count()
+    premium_users = db.query(models.User).filter(models.User.subscription_tier != "free", models.User.is_admin == False).count()
     active_keys = db.query(models.APIKey).filter(models.APIKey.is_active == True).count()
     
     # Calculate sum of tokens
@@ -152,3 +153,25 @@ def update_pricing_config(
             plan.updated_at = now
     db.commit()
     return db.query(models.PlanConfig).order_by(models.PlanConfig.id).all()
+
+@router.post("/reset")
+def reset_platform_data(
+    current_admin: models.User = Depends(auth.get_current_admin),
+    db: Session = Depends(get_db)
+):
+    # 1. Delete all API keys
+    db.query(models.APIKey).delete()
+    # 2. Delete all usage stats
+    db.query(models.UsageStats).delete()
+    # 3. Delete all messages and chat sessions
+    db.query(models.Message).delete()
+    db.query(models.ChatSession).delete()
+    # 4. Delete all projects
+    db.query(models.Project).delete()
+    # 5. Delete all OTP records
+    db.query(models.OTPVerification).delete()
+    # 6. Delete all users except current admin
+    db.query(models.User).filter(models.User.id != current_admin.id).delete()
+    
+    db.commit()
+    return {"status": "success", "message": "Platform reset completed successfully."}

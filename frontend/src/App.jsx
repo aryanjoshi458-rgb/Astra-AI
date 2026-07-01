@@ -55,6 +55,7 @@ const AppContent = () => {
   }, [currentPage]);
 
   React.useEffect(() => {
+    if (currentPage !== "landing") return;
     // Increment page visitor count on server
     const rawBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
     const API_BASE_URL = rawBaseUrl.endsWith("/") ? rawBaseUrl.slice(0, -1) : rawBaseUrl;
@@ -62,7 +63,7 @@ const AppContent = () => {
       .then(res => res.json())
       .then(data => console.log("Visitor analytics registered:", data))
       .catch(err => console.error("Failed to register visitor analytics:", err));
-  }, []);
+  }, [currentPage]);
 
   React.useEffect(() => {
     let title = "Astra AI | Think Beyond Limits - Premium AI Assistant Platform";

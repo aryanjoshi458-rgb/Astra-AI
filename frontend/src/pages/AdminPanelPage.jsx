@@ -19,8 +19,32 @@ export const AdminPanelPage = ({ onNavigate }) => {
   const [recentChats, setRecentChats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState("dashboard");
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem("astra_admin_active_tab") || "dashboard");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    const saved = localStorage.getItem("astra_admin_sidebar_open");
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("astra_admin_active_tab", activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    localStorage.setItem("astra_admin_sidebar_open", JSON.stringify(isSidebarOpen));
+  }, [isSidebarOpen]);
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: null,
+    confirmText: "Confirm",
+    cancelText: "Cancel",
+    isDanger: false,
+    isSuccess: false
+  });
+
+  const [resetConfirmInput, setResetConfirmInput] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
 
   // Settings States
   const [llmApiKey, setLlmApiKey] = useState("");
@@ -220,39 +244,102 @@ export const AdminPanelPage = ({ onNavigate }) => {
   };
 
   // Block/Unblock User
-  const handleToggleUserStatus = async (userId) => {
+  const handleToggleUserStatus = (userId) => {
     if (userId === user.id) {
       alert("You cannot deactivate your own admin profile.");
       return;
     }
-    try {
-      const updatedUser = await ApiClient.put(`/api/admin/users/${userId}/toggle-status`, {});
-      setUsersList((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, is_active: updatedUser.is_active } : u))
-      );
-    } catch (err) {
-      alert("Status toggle failed.");
-    }
+    const targetUser = usersList.find(u => u.id === userId);
+    const isActivating = !targetUser?.is_active;
+    
+    setConfirmModal({
+      isOpen: true,
+      title: isActivating ? "Unblock System User" : "Block System User",
+      message: `Are you sure you want to ${isActivating ? "unblock" : "block"} this user (${targetUser?.email || "this account"})? ${isActivating ? "They will be able to log in and use the platform again." : "They will be immediately blocked from accessing their account."}`,
+      confirmText: isActivating ? "Unblock User" : "Block User",
+      cancelText: "Cancel",
+      isDanger: !isActivating,
+      onConfirm: async () => {
+        try {
+          const updatedUser = await ApiClient.put(`/api/admin/users/${userId}/toggle-status`, {});
+          setUsersList((prev) =>
+            prev.map((u) => (u.id === userId ? { ...u, is_active: updatedUser.is_active } : u))
+          );
+        } catch (err) {
+          alert("Status toggle failed.");
+        }
+      }
+    });
   };
 
   // Delete User Account
-  const handleDeleteUser = async (userId) => {
+  const handleDeleteUser = (userId) => {
     if (userId === user.id) {
       alert("You cannot delete your own admin account.");
       return;
     }
-    if (!window.confirm("Are you sure you want to permanently delete this user account and all their chat history? This action cannot be undone.")) {
-      return;
-    }
-    try {
-      await ApiClient.delete(`/api/admin/users/${userId}`);
-      setUsersList((prev) => prev.filter((u) => u.id !== userId));
-      // Reload stats
-      const statsData = await ApiClient.get("/api/admin/stats");
-      setStats(statsData);
-    } catch (err) {
-      alert("Failed to delete user account.");
-    }
+    const targetUser = usersList.find(u => u.id === userId);
+    setConfirmModal({
+      isOpen: true,
+      title: "Permanently Delete Account",
+      message: `Are you sure you want to permanently delete the user account (${targetUser?.email || "this account"}) along with all their chat sessions, API keys, and workspace projects? This action is permanent and CANNOT be undone.`,
+      confirmText: "Delete Account",
+      cancelText: "Cancel",
+      isDanger: true,
+      onConfirm: async () => {
+        try {
+          await ApiClient.delete(`/api/admin/users/${userId}`);
+          setUsersList((prev) => prev.filter((u) => u.id !== userId));
+          const statsData = await ApiClient.get("/api/admin/stats");
+          setStats(statsData);
+        } catch (err) {
+          alert("Failed to delete user account.");
+        }
+      }
+    });
+  };
+
+  const handleSystemReset = async () => {
+    if (resetConfirmInput !== "RESET") return;
+    setConfirmModal({
+      isOpen: true,
+      title: "CRITICAL: Reset Entire Platform?",
+      message: "Are you absolutely sure you want to perform a full system reset? This will permanently delete all users, saved chats, messages, developer keys, and database stats. Only your admin profile will be kept. THIS ACTION CANNOT BE UNDONE.",
+      confirmText: "Yes, Reset Everything",
+      cancelText: "Cancel",
+      isDanger: true,
+      onConfirm: async () => {
+        try {
+          setResetLoading(true);
+          await ApiClient.post("/api/admin/reset", {});
+          setResetConfirmInput("");
+          // Reload stats
+          const statsData = await ApiClient.get("/api/admin/stats");
+          setStats(statsData);
+          setUsersList([user]);
+          
+          // Show custom success modal
+          setTimeout(() => {
+            setConfirmModal({
+              isOpen: true,
+              title: "System Reset Successful",
+              message: "The platform database has been completely wiped. All user accounts, chats, messages, metrics, and keys have been deleted.",
+              confirmText: "Back to Dashboard",
+              cancelText: "",
+              isDanger: false,
+              isSuccess: true,
+              onConfirm: () => {
+                setActiveTab("dashboard");
+              }
+            });
+          }, 300);
+        } catch (err) {
+          alert(err.message || "Failed to reset platform.");
+        } finally {
+          setResetLoading(false);
+        }
+      }
+    });
   };
 
   // Modify user subscription tier
@@ -303,13 +390,13 @@ export const AdminPanelPage = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-55 dark:bg-[#0c0c0c] text-slate-800 dark:text-slate-200 flex flex-col font-sans">
+    <div className="h-screen bg-slate-55 dark:bg-[#0c0c0c] text-slate-800 dark:text-slate-200 flex flex-col font-sans overflow-hidden">
 
       {/* Main Container with Sidebar */}
-      <div className="flex-1 flex overflow-hidden h-screen">
+      <div className="flex-1 flex overflow-hidden">
         
         {/* Sidebar Nav */}
-        <aside className={`bg-slate-50 dark:bg-[#121212] border-r border-slate-200 dark:border-white/5 flex flex-col shrink-0 overflow-hidden transition-all duration-300 ${
+        <aside className={`bg-slate-50 dark:bg-[#121212] border-r border-slate-200 dark:border-white/5 flex flex-col shrink-0 overflow-hidden h-full transition-all duration-300 ${
           isSidebarOpen ? "w-60" : "w-14"
         }`}>
 
@@ -347,6 +434,7 @@ export const AdminPanelPage = ({ onNavigate }) => {
               { id: "general", label: "General Settings", icon: Settings },
               { id: "developer", label: "Developer Keys", icon: Key },
               { id: "account", label: "Account Profile", icon: User },
+              { id: "systemReset", label: "System Reset", icon: RotateCcw },
               { id: "help", label: "Help Center", icon: HelpCircle },
             ].map(tab => {
               const Icon = tab.icon;
@@ -446,10 +534,10 @@ export const AdminPanelPage = ({ onNavigate }) => {
               {/* Summary widgets grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {[
-                  { label: "Site Visitors", val: "18", icon: Eye, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
+                  { label: "Site Visitors", val: stats.site_views || 0, icon: Eye, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
                   { label: "Total Users", val: stats.total_users, icon: Users, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
                   { label: "Paid Upgrades", val: stats.premium_users, icon: Sparkles, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
-                  { label: "Est. Revenue", val: `${currencyInfo.symbol}${Math.round(1.99 * currencyInfo.rate)}`, icon: DollarSign, color: "text-emerald-500 bg-emerald-500/10" }
+                  { label: "Est. Revenue", val: `${currencyInfo.symbol}${Math.round((stats.premium_users || 0) * 1.99 * currencyInfo.rate)}`, icon: DollarSign, color: "text-emerald-500 bg-emerald-500/10" }
                 ].map((card, idx) => {
                   const Icon = card.icon;
                   return (
@@ -475,24 +563,32 @@ export const AdminPanelPage = ({ onNavigate }) => {
                     <span>PLATFORM CONVERSION ANALYTICS</span>
                   </div>
                   <div className="space-y-4 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between">
-                        <span>Free Tier Conversion Rate</span>
-                        <span className="font-mono">33.3%</span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-100 dark:bg-white/5 rounded-full overflow-hidden">
-                        <div className="w-[33.3%] h-full bg-slate-300 dark:bg-white/20 rounded-full" />
-                      </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between">
-                        <span>Visitors to Sign-up Rate</span>
-                        <span className="font-mono">16.7%</span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-100 dark:bg-white/5 rounded-full overflow-hidden">
-                        <div className="w-[16.7%] h-full bg-slate-300 dark:bg-white/20 rounded-full" />
-                      </div>
-                    </div>
+                    {(() => {
+                      const premiumRate = stats.total_users > 0 ? ((stats.premium_users / stats.total_users) * 100).toFixed(1) : "0.0";
+                      const signupRate = (stats.site_views || 0) > 0 ? ((stats.total_users / stats.site_views) * 100).toFixed(1) : "0.0";
+                      return (
+                        <>
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between">
+                              <span>Free Tier Conversion Rate</span>
+                              <span className="font-mono">{premiumRate}%</span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-100 dark:bg-white/5 rounded-full overflow-hidden">
+                              <div className="h-full bg-slate-300 dark:bg-white/20 rounded-full" style={{ width: `${premiumRate}%` }} />
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between">
+                              <span>Visitors to Sign-up Rate</span>
+                              <span className="font-mono">{signupRate}%</span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-100 dark:bg-white/5 rounded-full overflow-hidden">
+                              <div className="h-full bg-slate-300 dark:bg-white/20 rounded-full" style={{ width: `${signupRate}%` }} />
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -528,6 +624,31 @@ export const AdminPanelPage = ({ onNavigate }) => {
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 select-none">
                   Manage user profiles, account permissions, and API key limits.
                 </p>
+              </div>
+
+              {/* Summary widgets grid */}
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                {[
+                  { label: "Total Users", val: stats.total_users, icon: Users, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
+                  { label: "Active Chats", val: stats.total_chats, icon: MessageSquare, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
+                  { label: "Total Messages", val: stats.total_messages, icon: Database, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
+                  { label: "Premium Users", val: stats.premium_users, icon: Sparkles, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
+                  { label: "Active Keys", val: stats.active_keys, icon: Key, color: "text-slate-800 dark:text-white bg-slate-100 dark:bg-white/5" },
+                  { label: "Monthly Requests", val: stats.monthly_requests, icon: Zap, color: "text-slate-850 dark:text-amber-400 bg-slate-100 dark:bg-white/5" }
+                ].map((card, idx) => {
+                  const Icon = card.icon;
+                  return (
+                    <div key={idx} className="bg-white dark:bg-[#121212] border border-slate-200 dark:border-white/5 p-4 rounded-2xl shadow-sm space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">{card.label}</span>
+                        <div className={`w-6 h-6 rounded-lg ${card.color} flex items-center justify-center`}>
+                          <Icon size={12} />
+                        </div>
+                      </div>
+                      <h3 className="text-lg font-black text-slate-800 dark:text-white">{card.val}</h3>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="bg-white dark:bg-[#121212] border border-slate-200 dark:border-white/5 rounded-2xl overflow-hidden shadow-sm">
@@ -1080,8 +1201,116 @@ export const AdminPanelPage = ({ onNavigate }) => {
             </div>
           )}
 
+          {/* ── SYSTEM RESET TAB ── */}
+          {activeTab === "systemReset" && (
+            <div className="animate-fade-in max-w-xl mx-auto space-y-6">
+              <div className="mb-6">
+                <div className="flex items-center gap-2.5 mb-1">
+                  <RotateCcw size={18} className="text-rose-500 animate-spin-reverse" />
+                  <h2 className="text-base font-bold text-slate-800 dark:text-white">System Reset</h2>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Perform a full wipe of the application database while keeping your admin profile intact.</p>
+              </div>
+
+              <div className="bg-white dark:bg-[#121212] border border-slate-200 dark:border-white/5 rounded-2xl p-6 shadow-sm space-y-4">
+                <div className="flex items-start gap-3 text-rose-500 bg-rose-500/5 p-4 rounded-xl border border-rose-500/10 text-xs">
+                  <ShieldAlert size={18} className="shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <span className="font-bold">CRITICAL WARNING</span>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                      This action will permanently delete all registered user accounts, their saved chats and conversation history, usage metrics, developer API keys, and workspace projects. <strong>Your active admin session and database profile will NOT be deleted.</strong>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                    To confirm this action, please type <span className="font-mono bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded text-rose-500 font-bold select-all">RESET</span> below and click the button.
+                  </p>
+
+                  <div className="relative p-[1.5px] rounded-xl overflow-hidden bg-theme-subtle transition-colors group max-w-xs">
+                    <input
+                      type="text"
+                      value={resetConfirmInput}
+                      onChange={e => setResetConfirmInput(e.target.value)}
+                      placeholder="Type RESET here"
+                      className="relative z-10 w-full bg-theme-card rounded-[10px] px-3.5 py-2.5 text-xs text-theme-primary outline-none placeholder:text-theme-muted font-bold tracking-wider"
+                    />
+                  </div>
+
+                  <button
+                    disabled={resetConfirmInput !== "RESET" || resetLoading}
+                    onClick={handleSystemReset}
+                    className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold text-white transition-all ${
+                      resetConfirmInput === "RESET" && !resetLoading
+                        ? 'bg-rose-500 hover:bg-rose-600 shadow-lg shadow-rose-500/10 cursor-pointer'
+                        : 'bg-slate-100 dark:bg-white/5 text-slate-400 dark:text-slate-650 cursor-not-allowed'
+                    }`}
+                  >
+                    <RotateCcw size={14} className={resetLoading ? "animate-spin" : ""} />
+                    <span>{resetLoading ? "Resetting Platform..." : "Wipe Database & Reset Platform"}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
         </main>
       </div>
+
+      {/* Premium Custom Confirmation Modal */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-[#121212] border border-slate-200 dark:border-white/10 rounded-2xl w-full max-w-md shadow-2xl p-6 transform scale-100 transition-all duration-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                confirmModal.isDanger 
+                  ? 'bg-rose-500/10 text-rose-500' 
+                  : confirmModal.isSuccess 
+                    ? 'bg-emerald-500/10 text-emerald-500' 
+                    : 'bg-slate-100 dark:bg-white/5 text-slate-500 dark:text-slate-400'
+              }`}>
+                {confirmModal.isDanger 
+                  ? <ShieldAlert size={20} /> 
+                  : confirmModal.isSuccess 
+                    ? <CheckCircle size={20} /> 
+                    : <Sparkles size={20} />}
+              </div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">{confirmModal.title}</h3>
+            </div>
+            
+            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+              {confirmModal.message}
+            </p>
+            
+            <div className="flex items-center justify-end gap-3 pt-2">
+              {confirmModal.cancelText && (
+                <button
+                  onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-white/10 text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/15 transition-all"
+                >
+                  {confirmModal.cancelText}
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (confirmModal.onConfirm) confirmModal.onConfirm();
+                  setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                }}
+                className={`px-4 py-2 rounded-xl text-xs font-semibold text-white transition-all ${
+                  confirmModal.isDanger 
+                    ? 'bg-rose-500 hover:bg-rose-600 active:bg-rose-700 shadow-md shadow-rose-500/10' 
+                    : confirmModal.isSuccess 
+                      ? 'bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 shadow-md shadow-emerald-500/10' 
+                      : 'bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-600/20'
+                }`}
+              >
+                {confirmModal.confirmText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
