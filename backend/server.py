@@ -940,7 +940,7 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                     return
                 
                 # Check for admin bypass
-                is_admin_bypass = (email == "admin@astra.ai" and otp == os.getenv("ADMIN_STATIC_OTP", "888888"))
+                is_admin_bypass = (email == "admin@astra.ai" and str(otp).strip() == str(os.getenv("ADMIN_STATIC_OTP", "888888")).strip())
                 
                 cursor = conn.cursor()
                 if not is_admin_bypass:
