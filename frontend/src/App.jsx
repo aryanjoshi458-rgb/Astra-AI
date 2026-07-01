@@ -55,15 +55,29 @@ const AppContent = () => {
   }, [currentPage]);
 
   React.useEffect(() => {
-    if (currentPage !== "landing") return;
+    // Do not count visit if the admin panel page is being accessed directly
+    if (window.location.hash === "#admin" || window.location.hash.startsWith("#admin")) {
+      return;
+    }
+
+    let visitorId = localStorage.getItem("astra_visitor_uuid");
+    if (!visitorId) {
+      visitorId = "vis_" + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem("astra_visitor_uuid", visitorId);
+    }
+
     // Increment page visitor count on server
     const rawBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
     const API_BASE_URL = rawBaseUrl.endsWith("/") ? rawBaseUrl.slice(0, -1) : rawBaseUrl;
-    fetch(`${API_BASE_URL}/api/analytics/visit`, { method: "POST" })
+    fetch(`${API_BASE_URL}/api/analytics/visit`, { 
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ visitor_id: visitorId })
+    })
       .then(res => res.json())
       .then(data => console.log("Visitor analytics registered:", data))
       .catch(err => console.error("Failed to register visitor analytics:", err));
-  }, [currentPage]);
+  }, []);
 
   React.useEffect(() => {
     let title = "Astra AI | Think Beyond Limits - Premium AI Assistant Platform";

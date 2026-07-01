@@ -755,9 +755,14 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
 
             # 0. ANALYTICS VISIT: POST /api/analytics/visit
             if path == "/api/analytics/visit":
-                ip = self.client_address[0]
+                visitor_id = None
+                if body and isinstance(body, dict):
+                    visitor_id = body.get("visitor_id")
+                if not visitor_id:
+                    visitor_id = self.client_address[0]
+                    
                 cursor = conn.cursor()
-                cursor.execute("SELECT ip FROM visitor_ips WHERE ip = ?", (ip,))
+                cursor.execute("SELECT ip FROM visitor_ips WHERE ip = ?", (visitor_id,))
                 exists = cursor.fetchone()
                 
                 # Fetch current views
@@ -768,7 +773,7 @@ class AstraHTTPHandler(http.server.BaseHTTPRequestHandler):
                 if not exists:
                     # New unique visitor!
                     new_val = val + 1
-                    cursor.execute("INSERT INTO visitor_ips (ip, created_at) VALUES (?, ?)", (ip, datetime.datetime.now().isoformat()))
+                    cursor.execute("INSERT INTO visitor_ips (ip, created_at) VALUES (?, ?)", (visitor_id, datetime.datetime.now().isoformat()))
                     cursor.execute("INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES ('site_views', ?, ?)",
                                    (str(new_val), datetime.datetime.now().isoformat()))
                     conn.commit()
