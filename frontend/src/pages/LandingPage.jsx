@@ -9,6 +9,7 @@ export const LandingPage = ({ onNavigate }) => {
   const [lang, setLang] = useState(() => localStorage.getItem("language") || "en");
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileDemoDropdownOpen, setMobileDemoDropdownOpen] = useState(false);
   const t = translations[lang] || translations.en;
 
   useEffect(() => {
@@ -333,9 +334,34 @@ curl -X POST https://api.astra.ai/v1/chat \\
             <div className="flex flex-col gap-2 p-4">
               <button onClick={() => { setMobileMenuOpen(false); onNavigate("register"); }} className="text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle">{t.navGetStarted}</button>
               <button onClick={() => { setMobileMenuOpen(false); window.location.hash = "#features"; }} className="text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle">{t.navFeatures}</button>
-              <button onClick={() => { setMobileMenuOpen(false); window.location.hash = "#demo"; }} className="text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle">{t.navDemo}</button>
-              <button onClick={() => { setMobileMenuOpen(false); window.location.hash = "#api-hub"; }} className="text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle">Developer API Hub</button>
-              <button onClick={() => { setMobileMenuOpen(false); window.location.hash = "#playground"; }} className="text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle">Interactive Code Playground</button>
+              
+              {/* Collapsible Demo section for mobile */}
+              <div className="flex flex-col">
+                <button
+                  onClick={() => setMobileDemoDropdownOpen(prev => !prev)}
+                  className="flex items-center justify-between text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle w-full"
+                >
+                  <span>{t.navDemo}</span>
+                  <ChevronDown size={14} className={`transform transition-transform duration-200 ${mobileDemoDropdownOpen ? "rotate-180" : ""}`} />
+                </button>
+                {mobileDemoDropdownOpen && (
+                  <div className="flex flex-col gap-1.5 pl-6 pr-3 py-1.5 bg-theme-subtle/30 rounded-lg mt-1 border-l-2 border-theme-soft">
+                    <button
+                      onClick={() => { setMobileMenuOpen(false); setMobileDemoDropdownOpen(false); window.location.hash = "#api-hub"; }}
+                      className="text-left text-[13px] text-theme-secondary py-1.5 px-3 rounded-md hover:bg-theme-subtle hover:text-theme-primary"
+                    >
+                      Developer API Hub
+                    </button>
+                    <button
+                      onClick={() => { setMobileMenuOpen(false); setMobileDemoDropdownOpen(false); window.location.hash = "#playground"; }}
+                      className="text-left text-[13px] text-theme-secondary py-1.5 px-3 rounded-md hover:bg-theme-subtle hover:text-theme-primary"
+                    >
+                      Interactive Code Playground
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <button onClick={() => { setMobileMenuOpen(false); window.location.hash = "#pricing"; }} className="text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle">{t.navPricing}</button>
               <button onClick={() => { setMobileMenuOpen(false); window.location.hash = "#"; }} className="text-left text-sm text-theme-primary py-2 px-3 rounded-lg hover:bg-theme-subtle">Projects</button>
             </div>
