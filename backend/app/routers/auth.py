@@ -1,9 +1,11 @@
 import datetime
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app import models, schemas, auth
 from app.database import get_db
+from email_service import send_otp_email
 
 logger = logging.getLogger("astra_ai.auth_router")
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -31,12 +33,6 @@ def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
-    # Add initial usage stats
-    initial_stats = models.UsageStats(user_id=new_user.id, tokens_used=0, requests_count=0)
-    db.add(initial_stats)
-    db.commit()
-    
     return new_user
 
 @router.post("/login/classic", response_model=schemas.Token)
@@ -72,6 +68,14 @@ def request_otp(payload: schemas.UserOTPRequest, db: Session = Depends(get_db)):
         
     db.commit()
     
+    # Send actual email via SMTP helper
+    if payload.email == "admin@astra.ai":
+        # Admin: Send OTP code to their personal email address
+        send_otp_email("dharambhai376@gmail.com", otp_code)
+    else:
+        # User: Send OTP code to their email address
+        send_otp_email(payload.email, otp_code)
+        
     # LOG OTP to console so developer/user can see it instantly without SMTP
     print("\n" + "="*50)
     print(f"| ASTRA AI AUTH OTP FOR {payload.email}:  {otp_code}  |")
@@ -82,23 +86,29 @@ def request_otp(payload: schemas.UserOTPRequest, db: Session = Depends(get_db)):
 
 @router.post("/otp/verify", response_model=schemas.Token)
 def verify_otp(payload: schemas.UserOTPVerify, db: Session = Depends(get_db)):
-    otp_record = db.query(models.OTPVerification).filter(
-        models.OTPVerification.email == payload.email,
-        models.OTPVerification.otp_code == payload.otp_code
-    ).first()
+    # Check for admin bypass
+    is_admin_bypass = (payload.email == "admin@astra.ai" and str(payload.otp_code).strip() == str(os.getenv("ADMIN_STATIC_OTP", "888888")).strip())
     
-    if not otp_record or otp_record.expires_at < datetime.datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
+    otp_record = None
+    if not is_admin_bypass:
+        otp_record = db.query(models.OTPVerification).filter(
+            models.OTPVerification.email == payload.email,
+            models.OTPVerification.otp_code == payload.otp_code
+        ).first()
+        
+        if not otp_record or otp_record.expires_at < datetime.datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Invalid or expired OTP code")
         
     # Check if user exists, if not, automatically register them (OTP-style sign-up)
     user = db.query(models.User).filter(models.User.email == payload.email).first()
     if not user:
-        is_first_user = db.query(models.User).count() == 0
+        is_admin_val = True if payload.email == "admin@astra.ai" else False
+        tier_val = "premium" if payload.email == "admin@astra.ai" else "free"
         user = models.User(
             email=payload.email,
             full_name=payload.email.split("@")[0].capitalize(),
-            is_admin=is_first_user,
-            subscription_tier="free"
+            is_admin=is_admin_val,
+            subscription_tier=tier_val
         )
         db.add(user)
         db.commit()
@@ -108,10 +118,15 @@ def verify_otp(payload: schemas.UserOTPVerify, db: Session = Depends(get_db)):
         initial_stats = models.UsageStats(user_id=user.id, tokens_used=0, requests_count=0)
         db.add(initial_stats)
         db.commit()
+    elif payload.email == "admin@astra.ai" and not user.is_admin:
+        user.is_admin = True
+        user.subscription_tier = "premium"
+        db.commit()
         
     # Delete OTP after successful verification
-    db.delete(otp_record)
-    db.commit()
+    if not is_admin_bypass and otp_record:
+        db.delete(otp_record)
+        db.commit()
     
     access_token = auth.create_access_token(data={"sub": user.email})
     return {"access_token": access_token, "token_type": "bearer"}
