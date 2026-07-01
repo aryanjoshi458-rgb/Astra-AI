@@ -95,6 +95,20 @@ def delete_project(
     db.commit()
     return {"message": "Project deleted successfully"}
 
+class VisitRequest(BaseModel):
+    visitor_id: str
+
+@app.post("/api/analytics/visit")
+def register_site_visit(payload: VisitRequest, db: Session = Depends(get_db)):
+    exists = db.query(models.VisitorIP).filter(models.VisitorIP.ip == payload.visitor_id).first()
+    if not exists:
+        new_visit = models.VisitorIP(ip=payload.visitor_id)
+        db.add(new_visit)
+        db.commit()
+    
+    count = db.query(models.VisitorIP).count()
+    return {"status": "success", "site_views": count}
+
 @app.get("/")
 def read_root():
     return {

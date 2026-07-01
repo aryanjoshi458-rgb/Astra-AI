@@ -135,6 +135,7 @@ class AdminDashboardStats(BaseModel):
     premium_users: int
     active_keys: int
     monthly_requests: int
+    site_views: int
 
 class SubscriptionUpdate(BaseModel):
     tier: str # free, premium, enterprise

@@ -118,3 +118,9 @@ class PlanConfig(Base):
     gst_rate = Column(Float, default=18.0)
     is_active = Column(Boolean, default=True)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class VisitorIP(Base):
+    __tablename__ = "visitor_ips"
+
+    ip = Column(String(255), primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

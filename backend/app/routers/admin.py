@@ -23,13 +23,17 @@ def get_admin_stats(
     tokens_sum = db.query(func.sum(models.UsageStats.tokens_used)).scalar() or 0
     requests_sum = db.query(func.sum(models.UsageStats.requests_count)).scalar() or 0
 
+    # Unique visitor count
+    site_views = db.query(models.VisitorIP).count()
+
     return {
         "total_users": total_users,
         "total_chats": total_chats,
         "total_messages": total_messages,
         "premium_users": premium_users,
         "active_keys": active_keys,
-        "monthly_requests": requests_sum
+        "monthly_requests": requests_sum,
+        "site_views": site_views
     }
 
 @router.get("/users", response_model=List[schemas.UserResponse])
@@ -172,6 +176,8 @@ def reset_platform_data(
     db.query(models.OTPVerification).delete()
     # 6. Delete all users except current admin
     db.query(models.User).filter(models.User.id != current_admin.id).delete()
+    # 7. Delete all registered visitor IPs
+    db.query(models.VisitorIP).delete()
     
     db.commit()
     return {"status": "success", "message": "Platform reset completed successfully."}
