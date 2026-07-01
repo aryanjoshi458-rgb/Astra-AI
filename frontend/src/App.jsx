@@ -56,7 +56,9 @@ const AppContent = () => {
 
   React.useEffect(() => {
     // Increment page visitor count on server
-    fetch("http://127.0.0.1:8000/api/analytics/visit", { method: "POST" })
+    const rawBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
+    const API_BASE_URL = rawBaseUrl.endsWith("/") ? rawBaseUrl.slice(0, -1) : rawBaseUrl;
+    fetch(`${API_BASE_URL}/api/analytics/visit`, { method: "POST" })
       .then(res => res.json())
       .then(data => console.log("Visitor analytics registered:", data))
       .catch(err => console.error("Failed to register visitor analytics:", err));
